@@ -326,7 +326,7 @@ var LocationModal = class extends import_obsidian.Modal {
       t.setPlaceholder("Location name").onChange((v) => this.data.name = v);
     });
     new import_obsidian.Setting(contentEl).setName("Type").addDropdown((d) => {
-      ["city", "region", "building", "landmark", "other"].forEach(
+      ["planet","moon","station","asteroid","city", "region", "building", "landmark", "other"].forEach(
         (o) => d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
       );
       d.onChange((v) => this.data.type = v);
