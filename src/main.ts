@@ -85,7 +85,7 @@ class WorldBuilderView extends ItemView {
 		containerEl.addClass("wb-sidebar");
 
 		const header = containerEl.createDiv("wb-header");
-		header.createEl("h2", { text: "World Builder" });
+		header.createEl("h2", { text: "Hatherton World Builder" });
 
 		const tabBar = containerEl.createDiv("wb-tabs");
 		const tabs: { id: WBTab; label: string }[] = [
