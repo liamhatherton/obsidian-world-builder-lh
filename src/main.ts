@@ -6,6 +6,7 @@ import {
 	Plugin,
 	PluginSettingTab,
 	Setting,
+	setIcon,
 	TFile,
 	WorkspaceLeaf,
 } from "obsidian";
@@ -14,8 +15,12 @@ import {
 
 interface WorldBuilderSettings {
 	worldFolder: string;
+	/** Custom character order, keyed by lower-cased employer name -> ordered note paths. */
+	characterOrder: Record<string, string[]>;
+	/** Lower-cased employer names whose character sub-section is collapsed. */
+	collapsedEmployers: string[];
 }
-const DEFAULT_SETTINGS: WorldBuilderSettings = { worldFolder: "World" };
+const DEFAULT_SETTINGS: WorldBuilderSettings = { worldFolder: "World", characterOrder: {}, collapsedEmployers: [] };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -52,12 +57,35 @@ function readFrontmatter(content: string): Record<string, string> {
 	for (const line of match[1].split("\n")) {
 		const idx = line.indexOf(":");
 		if (idx === -1) continue;
-		result[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+		let value = line.slice(idx + 1).trim();
+		if (
+			value.length >= 2 &&
+			((value.startsWith('"') && value.endsWith('"')) ||
+				(value.startsWith("'") && value.endsWith("'")))
+		) {
+			value = value.slice(1, -1);
+		}
+		result[line.slice(0, idx).trim()] = value;
 	}
 	return result;
 }
 
-type WBTab = "characters" | "locations" | "factions" | "lore" | "timeline";
+/** "Label: value • Label: value" for the non-empty values. A non-breaking space keeps each label with its value when the line wraps. */
+function labeledLine(pairs: ReadonlyArray<readonly [string, string | undefined]>): string {
+	return pairs
+		.filter(([, value]) => value)
+		.map(([label, value]) => `${label}:\u00a0${value}`)
+		.join(" • ");
+}
+
+interface NoteEntry {
+	file: TFile;
+	content: string;
+	fm: Record<string, string>;
+}
+type CardFn = (fm: Record<string, string>) => { title: string; meta: string; badge: string };
+
+type WBTab = "characters" | "locations" | "employers" | "lore" | "timeline";
 
 // ─── Sidebar View ─────────────────────────────────────────────────────────────
 
@@ -81,17 +109,18 @@ class WorldBuilderView extends ItemView {
 
 	async render() {
 		const { containerEl } = this;
+		const scrollTop = containerEl.scrollTop;
 		containerEl.empty();
 		containerEl.addClass("wb-sidebar");
 
 		const header = containerEl.createDiv("wb-header");
-		header.createEl("h2", { text: "World Builder" });
+		header.createEl("h2", { text: "Hatherton World Builder" });
 
 		const tabBar = containerEl.createDiv("wb-tabs");
 		const tabs: { id: WBTab; label: string }[] = [
 			{ id: "characters", label: "Characters" },
 			{ id: "locations", label: "Locations" },
-			{ id: "factions", label: "Factions" },
+			{ id: "employers", label: "Employers" },
 			{ id: "lore", label: "Lore" },
 			{ id: "timeline", label: "Timeline" },
 		];
@@ -121,9 +150,14 @@ class WorldBuilderView extends ItemView {
 			() => new CharacterModal(this.app, this.plugin, () => this.render()).open(),
 			(fm) => ({
 				title: fm.name ?? "Unnamed",
-				meta: `${fm.role ?? ""} ${fm.faction ? `· ${fm.faction}` : ""}`.trim(),
+				// Two lines: age/home, then employer/ship (a line with no values is dropped).
+				meta: [
+					labeledLine([["Age", fm.age], ["Home", fm.home]]),
+					labeledLine([["Employer", fm.employer], ["Ship", fm.ship]]),
+				].filter(Boolean).join("\n"),
 				badge: fm.role ?? "",
-			})
+			}),
+			{ thumbs: true, employerGroups: true, stackBadge: true }
 		);
 
 		await this.renderSection(
@@ -139,10 +173,10 @@ class WorldBuilderView extends ItemView {
 		);
 
 		await this.renderSection(
-			contents.factions!,
-			`${folder}/Factions`,
-			"Factions",
-			() => new FactionModal(this.app, this.plugin, () => this.render()).open(),
+			contents.employers!,
+			`${folder}/Employers`,
+			"Employers",
+			() => new EmployerModal(this.app, this.plugin, () => this.render()).open(),
 			(fm) => ({
 				title: fm.name ?? "Unnamed",
 				meta: fm.goals ?? "",
@@ -173,6 +207,39 @@ class WorldBuilderView extends ItemView {
 				badge: "",
 			})
 		);
+
+		// Redrawing empties the container, which resets its scroll position; restore it.
+		containerEl.scrollTop = scrollTop;
+	}
+
+	/** Returns a displayable URL for the first image embedded in a note, or null. */
+	findFirstImageSrc(content: string, file: TFile): string | null {
+		const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
+		const re = /!\[\[([^\]]+)\]\]|!\[[^\]]*\]\((<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\)/g;
+		let m: RegExpExecArray | null;
+		while ((m = re.exec(content)) !== null) {
+			let target: string;
+			if (m[1] !== undefined) {
+				// Wiki embed: ![[image.png|300]]
+				target = m[1].split("|")[0]!.split("#")[0]!.trim();
+			} else {
+				// Markdown embed: ![alt](path/to/image.png)
+				target = (m[2] ?? "").trim();
+				if (target.startsWith("<") && target.endsWith(">")) target = target.slice(1, -1);
+				if (/^https?:\/\//i.test(target)) {
+					if (IMG_EXT.test(target.split(/[?#]/)[0]!)) return target;
+					continue;
+				}
+				try { target = decodeURIComponent(target); } catch (e) { /* keep as-is */ }
+				target = target.split("#")[0]!;
+			}
+			if (!IMG_EXT.test(target)) continue;
+			const dest =
+				this.app.metadataCache.getFirstLinkpathDest(target, file.path) ??
+				this.app.vault.getAbstractFileByPath(target);
+			if (dest instanceof TFile) return this.app.vault.getResourcePath(dest);
+		}
+		return null;
 	}
 
 	async renderSection(
@@ -180,38 +247,218 @@ class WorldBuilderView extends ItemView {
 		folderPath: string,
 		label: string,
 		onCreate: () => void,
-		getCard: (fm: Record<string, string>) => { title: string; meta: string; badge: string }
+		getCard: (fm: Record<string, string>) => { title: string; meta: string; badge: string },
+		opts: { thumbs?: boolean; reload?: boolean; employerGroups?: boolean; stackBadge?: boolean } = {}
 	) {
 		const hdr = container.createDiv("wb-section-header");
 		hdr.createEl("span", { text: label });
-		const btn = hdr.createEl("button", { text: "+ New", cls: "wb-btn-primary" });
+		const actions = hdr.createDiv("wb-section-actions");
+		if (opts.reload ?? true) {
+			const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary" });
+			setIcon(reloadBtn.createEl("span", { cls: "wb-btn-icon" }), "refresh-cw");
+			reloadBtn.createEl("span", { text: "Reload" });
+			reloadBtn.onclick = async () => {
+				await this.render();
+				new Notice("World Builder reloaded.");
+			};
+		}
+		const btn = actions.createEl("button", { text: "+ New", cls: "wb-btn-primary" });
 		btn.onclick = onCreate;
 
 		const files = this.app.vault.getMarkdownFiles().filter((f) =>
 			f.path.startsWith(folderPath + "/")
 		);
 
-		const list = container.createDiv("wb-list");
 		if (files.length === 0) {
-			list.createDiv({ cls: "wb-empty", text: `No ${label.toLowerCase()} yet.` });
+			container.createDiv("wb-list").createDiv({ cls: "wb-empty", text: `No ${label.toLowerCase()} yet.` });
 			return;
 		}
 
+		const entries: NoteEntry[] = [];
 		for (const file of files) {
 			const content = await this.app.vault.cachedRead(file);
-			const fm = readFrontmatter(content);
-			const { title, meta, badge } = getCard(fm);
-
-			const card = list.createDiv("wb-card");
-			const titleEl = card.createDiv("wb-card-title");
-			titleEl.setText(title);
-			if (badge) {
-				const b = titleEl.createSpan({ cls: `wb-badge wb-badge-${badge.toLowerCase()}` });
-				b.setText(badge);
-			}
-			if (meta) card.createDiv({ cls: "wb-card-meta", text: meta });
-			card.onclick = () => this.app.workspace.getLeaf().openFile(file);
+			entries.push({ file, content, fm: readFrontmatter(content) });
 		}
+
+		if (!opts.employerGroups) {
+			const list = container.createDiv("wb-list");
+			for (const entry of entries) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge);
+			return;
+		}
+
+		// Characters: one sub-section per employer, each with its own drag-to-reorder list.
+		const groups = new Map<string, { label: string; items: NoteEntry[] }>();
+		for (const entry of entries) {
+			const employer = (entry.fm.employer ?? "").trim();
+			const key = employer.toLowerCase();
+			let group = groups.get(key);
+			if (!group) {
+				group = { label: employer || "No Employer", items: [] };
+				groups.set(key, group);
+			}
+			group.items.push(entry);
+		}
+
+		// Alphabetical by employer, with characters who have no employer last.
+		const orderedGroups = [...groups.entries()].sort(
+			([a], [b]) => (a === "" ? 1 : 0) - (b === "" ? 1 : 0) || a.localeCompare(b)
+		);
+
+		for (const [key, group] of orderedGroups) {
+			const header = container.createDiv("wb-group-header");
+			header.setAttribute("role", "button");
+			header.setAttribute("tabindex", "0");
+			setIcon(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
+			header.createEl("span", { cls: "wb-group-title", text: group.label });
+			const list = container.createDiv("wb-list");
+
+			const applyCollapsed = (collapsed: boolean) => {
+				header.classList.toggle("is-collapsed", collapsed);
+				list.classList.toggle("is-collapsed", collapsed);
+				header.setAttribute("aria-expanded", String(!collapsed));
+			};
+			applyCollapsed(this.plugin.settings.collapsedEmployers.includes(key));
+
+			const toggleCollapsed = async () => {
+				const settings = this.plugin.settings;
+				const collapse = !settings.collapsedEmployers.includes(key);
+				settings.collapsedEmployers = collapse
+					? [...settings.collapsedEmployers, key]
+					: settings.collapsedEmployers.filter((k) => k !== key);
+				applyCollapsed(collapse);
+				await this.plugin.saveSettings();
+			};
+			header.onclick = toggleCollapsed;
+			header.onkeydown = (e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					toggleCollapsed();
+				}
+			};
+
+			// Saved order first; anything not yet ordered keeps its default position after them.
+			const saved = this.plugin.settings.characterOrder[key] ?? [];
+			const rank = (path: string) => {
+				const i = saved.indexOf(path);
+				return i === -1 ? saved.length : i;
+			};
+			const items = group.items
+				.map((entry, index) => ({ entry, index }))
+				.sort((a, b) => rank(a.entry.file.path) - rank(b.entry.file.path) || a.index - b.index)
+				.map(({ entry }) => entry);
+
+			for (const entry of items) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge);
+			this.enableReorder(list, key);
+		}
+	}
+
+	private renderCard(
+		parent: HTMLElement,
+		entry: NoteEntry,
+		getCard: CardFn,
+		thumbs: boolean,
+		stackBadge: boolean
+	): HTMLElement {
+		const { file, content, fm } = entry;
+		const { title, meta, badge } = getCard(fm);
+
+		const card = parent.createDiv("wb-card");
+		if (stackBadge) card.addClass("wb-card-stacked");
+		card.setAttribute("data-path", file.path);
+		let body: HTMLElement = card;
+		if (thumbs) {
+			card.addClass("wb-card-with-thumb");
+			const thumb = card.createDiv("wb-thumb");
+			const src = this.findFirstImageSrc(content, file);
+			if (src) {
+				const img = thumb.createEl("img", { attr: { src, alt: "", draggable: "false" } });
+				img.onerror = () => img.remove();
+			}
+			body = card.createDiv("wb-card-body");
+		}
+		const titleEl = body.createDiv("wb-card-title");
+		titleEl.setText(title);
+		if (badge) {
+			// stackBadge: badge on its own line under the name; otherwise inline beside it
+			const badgeHost = stackBadge ? body.createDiv("wb-card-badge-row") : titleEl;
+			const b = badgeHost.createSpan({ cls: `wb-badge wb-badge-${badge.toLowerCase()}` });
+			b.setText(badge);
+		}
+		if (meta) for (const line of meta.split("\n")) body.createDiv({ cls: "wb-card-meta", text: line });
+		card.onclick = () => this.app.workspace.getLeaf().openFile(file);
+		return card;
+	}
+
+	/**
+	 * Makes the cards in one employer's list drag-sortable. Each list only accepts cards
+	 * that were picked up from that same list, so characters can't be moved between employers.
+	 * The new order is saved to plugin data (notes themselves are never modified).
+	 */
+	private enableReorder(list: HTMLElement, groupKey: string) {
+		let dragged: HTMLElement | null = null;
+		let dropTarget: HTMLElement | null = null;
+		let dropAfter = false;
+
+		const cardAt = (t: EventTarget | null): HTMLElement | null =>
+			t instanceof HTMLElement ? t.closest<HTMLElement>(".wb-card") : null;
+		const clearMarks = () => {
+			list.querySelectorAll(".wb-drop-before, .wb-drop-after").forEach((el) =>
+				el.classList.remove("wb-drop-before", "wb-drop-after")
+			);
+			dropTarget = null;
+		};
+
+		list.querySelectorAll<HTMLElement>(".wb-card").forEach((card) =>
+			card.setAttribute("draggable", "true")
+		);
+
+		list.addEventListener("dragstart", (e) => {
+			const card = cardAt(e.target);
+			if (!card || !e.dataTransfer) return;
+			dragged = card;
+			e.dataTransfer.effectAllowed = "move";
+			// Custom type only, so dropping onto a note or editor doesn't paste anything.
+			e.dataTransfer.setData("application/x-wb-character", card.getAttribute("data-path") ?? "");
+			window.setTimeout(() => card.classList.add("wb-dragging"), 0);
+		});
+
+		list.addEventListener("dragend", () => {
+			dragged?.classList.remove("wb-dragging");
+			dragged = null;
+			clearMarks();
+		});
+
+		list.addEventListener("dragover", (e) => {
+			if (!dragged) return; // not picked up from this employer's list: not a valid drop
+			e.preventDefault();
+			if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+			const target = cardAt(e.target);
+			if (!target) return; // in a gap between cards: keep the last indicator
+			clearMarks();
+			if (target === dragged) return;
+			const r = target.getBoundingClientRect();
+			dropTarget = target;
+			dropAfter = e.clientY >= r.top + r.height / 2;
+			target.classList.add(dropAfter ? "wb-drop-after" : "wb-drop-before");
+		});
+
+		list.addEventListener("dragleave", (e) => {
+			if (!list.contains(e.relatedTarget as Node | null)) clearMarks();
+		});
+
+		list.addEventListener("drop", async (e) => {
+			if (!dragged) return;
+			e.preventDefault();
+			const moving = dragged;
+			if (dropTarget && dropTarget !== moving) {
+				list.insertBefore(moving, dropAfter ? dropTarget.nextSibling : dropTarget);
+				this.plugin.settings.characterOrder[groupKey] = Array.from(
+					list.querySelectorAll<HTMLElement>(".wb-card")
+				).map((c) => c.getAttribute("data-path") ?? "");
+				await this.plugin.saveSettings();
+			}
+			clearMarks();
+		});
 	}
 }
 
@@ -221,7 +468,7 @@ class CharacterModal extends Modal {
 	plugin: WorldBuilderPlugin;
 	onDone: () => void;
 	data = {
-		name: "", role: "protagonist", age: "", faction: "",
+		name: "", role: "protagonist", age: "", employer: "", ship: "", home: "",
 		physicalDesc: "", personality: "", goals: "", secrets: ""
 	};
 
@@ -248,8 +495,14 @@ class CharacterModal extends Modal {
 		new Setting(contentEl).setName("Age").addText((t) => {
 			t.setPlaceholder("e.g. 34").onChange((v) => (this.data.age = v));
 		});
-		new Setting(contentEl).setName("Faction").addText((t) => {
-			t.setPlaceholder("Faction name").onChange((v) => (this.data.faction = v));
+		new Setting(contentEl).setName("Employer").addText((t) => {
+			t.setPlaceholder("Employer name").onChange((v) => (this.data.employer = v));
+		});
+		new Setting(contentEl).setName("Ship").addText((t) => {
+			t.setPlaceholder("Ship name").onChange((v) => (this.data.ship = v));
+		});
+		new Setting(contentEl).setName("Home").addText((t) => {
+			t.setPlaceholder("Home name").onChange((v) => (this.data.home = v));
 		});
 		new Setting(contentEl).setName("Physical Description").addTextArea((t) => {
 			t.inputEl.addClass("wb-textarea");
@@ -281,7 +534,9 @@ class CharacterModal extends Modal {
 			`name: "${this.data.name}"`,
 			`role: ${this.data.role}`,
 			`age: "${this.data.age}"`,
-			`faction: "${this.data.faction}"`,
+			`employer: "${this.data.employer}"`,
+			`ship: "${this.data.ship}"`,
+			`home: "${this.data.home}"`,
 			`type: character`,
 			"---",
 			"",
@@ -392,7 +647,7 @@ class LocationModal extends Modal {
 	onClose() { this.contentEl.empty(); }
 }
 
-class FactionModal extends Modal {
+class EmployerModal extends Modal {
 	plugin: WorldBuilderPlugin;
 	onDone: () => void;
 	data = {
@@ -408,10 +663,10 @@ class FactionModal extends Modal {
 	onOpen() {
 		const { contentEl } = this;
 		contentEl.addClass("wb-modal");
-		contentEl.createEl("h2", { text: "New Faction" });
+		contentEl.createEl("h2", { text: "New Employer" });
 
 		new Setting(contentEl).setName("Name").addText((t) => {
-			t.setPlaceholder("Faction name").onChange((v) => (this.data.name = v));
+			t.setPlaceholder("Employer name").onChange((v) => (this.data.name = v));
 		});
 		new Setting(contentEl).setName("Alignment").addDropdown((d) => {
 			["lawful", "neutral", "chaotic"].forEach((o) =>
@@ -441,7 +696,7 @@ class FactionModal extends Modal {
 
 	async submit() {
 		if (!this.data.name.trim()) { new Notice("Name is required."); return; }
-		const folder = `${this.plugin.settings.worldFolder}/Factions`;
+		const folder = `${this.plugin.settings.worldFolder}/Employers`;
 		const enemyLinks = this.data.enemies.split(",").filter(Boolean).map((e) => `[[${e.trim()}]]`).join(", ");
 		const allyLinks = this.data.allies.split(",").filter(Boolean).map((a) => `[[${a.trim()}]]`).join(", ");
 		const lines = [
@@ -449,7 +704,7 @@ class FactionModal extends Modal {
 			`name: "${this.data.name}"`,
 			`alignment: ${this.data.alignment}`,
 			`goals: "${this.data.goals.replace(/"/g, "'")}"`,
-			`entry_type: faction`,
+			`entry_type: employer`,
 			"---",
 			"",
 			`# ${this.data.name}`,
@@ -460,7 +715,7 @@ class FactionModal extends Modal {
 		if (allyLinks) lines.push(`**Allies:** ${allyLinks}`);
 		lines.push("", "## Goals", this.data.goals || "_None provided._", "", "## Description", this.data.description || "_None provided._");
 		const file = await createNote(this.app, folder, this.data.name, lines.join("\n"));
-		new Notice(`Faction "${this.data.name}" created.`);
+		new Notice(`Employer "${this.data.name}" created.`);
 		this.close();
 		this.onDone();
 		await this.app.workspace.getLeaf().openFile(file);
@@ -489,7 +744,7 @@ class LoreModal extends Modal {
 			t.setPlaceholder("Entry title").onChange((v) => (this.data.title = v));
 		});
 		new Setting(contentEl).setName("Category").addDropdown((d) => {
-			["history", "magic", "religion", "culture", "other"].forEach((o) =>
+			["history", "tech", "religion", "culture", "other"].forEach((o) =>
 				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
 			);
 			d.onChange((v) => (this.data.category = v));
@@ -654,9 +909,9 @@ export default class WorldBuilderPlugin extends Plugin {
 			callback: () => new LocationModal(this.app, this, () => this.refreshSidebar()).open(),
 		});
 		this.addCommand({
-			id: "new-faction",
-			name: "New Faction",
-			callback: () => new FactionModal(this.app, this, () => this.refreshSidebar()).open(),
+			id: "new-employer",
+			name: "New Employer",
+			callback: () => new EmployerModal(this.app, this, () => this.refreshSidebar()).open(),
 		});
 		this.addCommand({
 			id: "new-lore",
@@ -668,6 +923,17 @@ export default class WorldBuilderPlugin extends Plugin {
 			name: "New Timeline Event",
 			callback: () => new TimelineModal(this.app, this, () => this.refreshSidebar()).open(),
 		});
+
+		this.registerEvent(
+			this.app.vault.on("rename", async (file, oldPath) => {
+				let changed = false;
+				for (const order of Object.values(this.settings.characterOrder)) {
+					const i = order.indexOf(oldPath);
+					if (i !== -1) { order[i] = file.path; changed = true; }
+				}
+				if (changed) await this.saveSettings();
+			})
+		);
 
 		this.addSettingTab(new WorldBuilderSettingTab(this.app, this));
 	}
@@ -690,7 +956,10 @@ export default class WorldBuilderPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const data = await this.loadData();
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+		this.settings.characterOrder = data?.characterOrder ?? {};
+		this.settings.collapsedEmployers = data?.collapsedEmployers ?? [];
 	}
 	async saveSettings() {
 		await this.saveData(this.settings);

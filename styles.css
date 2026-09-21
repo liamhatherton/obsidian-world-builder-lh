@@ -1,6 +1,8 @@
 /* World Builder */
 
 .wb-sidebar { padding: 16px; }
+/* The view's root is the whole leaf, which doesn't scroll on its own. */
+.workspace-leaf-content.wb-sidebar { overflow-x: hidden; overflow-y: auto; }
 
 .wb-header {
 	display: flex;
@@ -45,7 +47,7 @@
 	justify-content: space-between;
 	margin-bottom: 10px;
 }
-.wb-section-header span {
+.wb-section-header > span {
 	font-size: 0.8em;
 	color: var(--text-muted);
 }
@@ -64,6 +66,65 @@
 	cursor: pointer;
 }
 .wb-card:hover { border-color: var(--interactive-accent); }
+
+.wb-card-with-thumb {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+.wb-thumb {
+	--wb-thumb-size: 56px;
+	flex: 0 0 var(--wb-thumb-size);
+	width: var(--wb-thumb-size);
+	height: var(--wb-thumb-size);
+	aspect-ratio: 1 / 1;
+	border-radius: 4px;
+	background: #000; /* shown when the note has no image */
+	overflow: hidden;
+}
+/* Always fill the square and crop (display only; the image file is untouched). */
+.wb-card .wb-thumb img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	max-width: none;
+	max-height: none;
+	margin: 0;
+	object-fit: cover;
+	object-position: center;
+}
+.wb-card-body { flex: 1; min-width: 0; }
+
+.wb-group-header {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	cursor: pointer;
+	user-select: none;
+	margin: 16px 0 8px;
+	padding-bottom: 4px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	font-size: 0.85em;
+	font-weight: 600;
+	color: var(--text-normal);
+}
+.wb-section-header + .wb-group-header { margin-top: 4px; }
+.wb-group-header:hover .wb-group-title { color: var(--text-accent); }
+.wb-group-chevron {
+	display: inline-flex;
+	align-items: center;
+	color: var(--text-muted);
+	transition: transform 0.15s ease;
+}
+.wb-group-chevron svg { width: 14px; height: 14px; }
+.wb-group-header.is-collapsed .wb-group-chevron { transform: rotate(-90deg); }
+.wb-list.is-collapsed { display: none; }
+
+.wb-list .wb-card[draggable="true"] { cursor: grab; }
+.wb-list .wb-card[draggable="true"]:active { cursor: grabbing; }
+.wb-card.wb-dragging { opacity: 0.4; }
+.wb-card.wb-drop-before { box-shadow: 0 -3px 0 0 var(--interactive-accent); }
+.wb-card.wb-drop-after { box-shadow: 0 3px 0 0 var(--interactive-accent); }
 
 .wb-card-title {
 	font-weight: 600;
@@ -85,6 +146,14 @@
 	color: var(--tag-color);
 	margin-left: 4px;
 }
+.wb-card-badge-row { margin-bottom: 3px; }
+.wb-card-badge-row .wb-badge { margin-left: 0; }
+
+/* Character cards: tighter name -> role spacing */
+.wb-card-stacked .wb-card-title { margin-bottom: 0; line-height: 1.25; }
+.wb-card-stacked .wb-card-badge-row { display: flex; align-items: flex-start; margin-top: 0; }
+.wb-card-stacked .wb-badge { line-height: 1.35; }
+
 .wb-badge-protagonist { background: #2d6a4f33; color: #52b788; }
 .wb-badge-antagonist  { background: #6d2d2d33; color: #e07070; }
 .wb-badge-supporting  { background: #2d3d6a33; color: #70a0e0; }
@@ -110,6 +179,31 @@
 	cursor: pointer;
 }
 .wb-btn-primary:hover { background: var(--interactive-accent-hover); }
+
+.wb-section-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.wb-btn-secondary {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	background: var(--interactive-normal);
+	color: var(--text-normal);
+	border: none;
+	border-radius: 4px;
+	padding: 4px 10px;
+	font-size: 0.85em;
+	cursor: pointer;
+}
+.wb-btn-secondary:hover { background: var(--interactive-hover); }
+.wb-btn-icon {
+	display: inline-flex;
+	align-items: center;
+}
+.wb-btn-icon svg { width: 14px; height: 14px; }
 
 .wb-modal .setting-item { border-top: none; }
 .wb-textarea { width: 100%; resize: vertical; min-height: 70px; }
