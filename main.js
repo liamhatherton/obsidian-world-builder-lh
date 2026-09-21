@@ -410,8 +410,7 @@ var CharacterModal = class extends import_obsidian.Modal {
       home: "",
       physicalDesc: "",
       personality: "",
-      goals: "",
-      secrets: ""
+      goals: ""
     };
     this.plugin = plugin;
     this.onDone = onDone;
@@ -453,10 +452,6 @@ var CharacterModal = class extends import_obsidian.Modal {
       t.inputEl.addClass("wb-textarea");
       t.onChange((v) => this.data.goals = v);
     });
-    new import_obsidian.Setting(contentEl).setName("Secrets").addTextArea((t) => {
-      t.inputEl.addClass("wb-textarea");
-      t.onChange((v) => this.data.secrets = v);
-    });
     new import_obsidian.Setting(contentEl).addButton(
       (b) => b.setButtonText("Create").setCta().onClick(() => this.submit())
     );
@@ -467,6 +462,26 @@ var CharacterModal = class extends import_obsidian.Modal {
       return;
     }
     const folder = `${this.plugin.settings.worldFolder}/Characters`;
+    const sections = [
+      ["Origin", ""],
+      ["Physical Description", this.data.physicalDesc],
+      ["Occupation", ""],
+      ["Resume", ""],
+      ["Role In Story", ""],
+      ["Goals", this.data.goals],
+      ["Personality", this.data.personality],
+      ["Habits/Mannerisms", ""],
+      ["Earlier Life", ""],
+      ["Internal Conflicts", ""],
+      ["External Conflicts", ""]
+    ];
+    const headingColor = "#fac08f";
+    const sectionLines = [];
+    for (const [heading, text] of sections) {
+      sectionLines.push(`## <font color="${headingColor}">${heading}</font>`);
+      if (text) sectionLines.push(text);
+      sectionLines.push("");
+    }
     const content = [
       "---",
       `name: "${this.data.name}"`,
@@ -480,17 +495,7 @@ var CharacterModal = class extends import_obsidian.Modal {
       "",
       `# ${this.data.name}`,
       "",
-      "## Physical Description",
-      this.data.physicalDesc || "_None provided._",
-      "",
-      "## Personality",
-      this.data.personality || "_None provided._",
-      "",
-      "## Goals",
-      this.data.goals || "_None provided._",
-      "",
-      "## Secrets",
-      this.data.secrets || "_None provided._"
+      ...sectionLines
     ].join("\n");
     const file = await createNote(this.app, folder, this.data.name, content);
     new import_obsidian.Notice(`Character "${this.data.name}" created.`);

@@ -469,7 +469,7 @@ class CharacterModal extends Modal {
 	onDone: () => void;
 	data = {
 		name: "", role: "protagonist", age: "", employer: "", ship: "", home: "",
-		physicalDesc: "", personality: "", goals: "", secrets: ""
+		physicalDesc: "", personality: "", goals: ""
 	};
 
 	constructor(app: App, plugin: WorldBuilderPlugin, onDone: () => void) {
@@ -516,10 +516,6 @@ class CharacterModal extends Modal {
 			t.inputEl.addClass("wb-textarea");
 			t.onChange((v) => (this.data.goals = v));
 		});
-		new Setting(contentEl).setName("Secrets").addTextArea((t) => {
-			t.inputEl.addClass("wb-textarea");
-			t.onChange((v) => (this.data.secrets = v));
-		});
 
 		new Setting(contentEl).addButton((b) =>
 			b.setButtonText("Create").setCta().onClick(() => this.submit())
@@ -529,6 +525,28 @@ class CharacterModal extends Modal {
 	async submit() {
 		if (!this.data.name.trim()) { new Notice("Name is required."); return; }
 		const folder = `${this.plugin.settings.worldFolder}/Characters`;
+		// Character note sections, in order. Text entered in the form goes under its heading;
+		// the rest are left as empty headings to fill in later.
+		const sections: [string, string][] = [
+			["Origin", ""],
+			["Physical Description", this.data.physicalDesc],
+			["Occupation", ""],
+			["Resume", ""],
+			["Role In Story", ""],
+			["Goals", this.data.goals],
+			["Personality", this.data.personality],
+			["Habits/Mannerisms", ""],
+			["Earlier Life", ""],
+			["Internal Conflicts", ""],
+			["External Conflicts", ""],
+		];
+		const headingColor = "#fac08f";
+		const sectionLines: string[] = [];
+		for (const [heading, text] of sections) {
+			sectionLines.push(`## <font color="${headingColor}">${heading}</font>`);
+			if (text) sectionLines.push(text);
+			sectionLines.push("");
+		}
 		const content = [
 			"---",
 			`name: "${this.data.name}"`,
@@ -542,17 +560,7 @@ class CharacterModal extends Modal {
 			"",
 			`# ${this.data.name}`,
 			"",
-			"## Physical Description",
-			this.data.physicalDesc || "_None provided._",
-			"",
-			"## Personality",
-			this.data.personality || "_None provided._",
-			"",
-			"## Goals",
-			this.data.goals || "_None provided._",
-			"",
-			"## Secrets",
-			this.data.secrets || "_None provided._",
+			...sectionLines,
 		].join("\n");
 		const file = await createNote(this.app, folder, this.data.name, content);
 		new Notice(`Character "${this.data.name}" created.`);
