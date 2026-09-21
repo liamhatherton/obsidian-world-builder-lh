@@ -6,6 +6,7 @@ import {
 	Plugin,
 	PluginSettingTab,
 	Setting,
+	setIcon,
 	TFile,
 	WorkspaceLeaf,
 } from "obsidian";
@@ -132,7 +133,7 @@ class WorldBuilderView extends ItemView {
 				meta: [fm.employer, fm.ship].filter(Boolean).join(" · "),
 				badge: fm.role ?? "",
 			}),
-			true
+			{ thumbs: true, reload: true }
 		);
 
 		await this.renderSection(
@@ -220,11 +221,21 @@ class WorldBuilderView extends ItemView {
 		label: string,
 		onCreate: () => void,
 		getCard: (fm: Record<string, string>) => { title: string; meta: string; badge: string },
-		showThumb = false
+		opts: { thumbs?: boolean; reload?: boolean } = {}
 	) {
 		const hdr = container.createDiv("wb-section-header");
 		hdr.createEl("span", { text: label });
-		const btn = hdr.createEl("button", { text: "+ New", cls: "wb-btn-primary" });
+		const actions = hdr.createDiv("wb-section-actions");
+		if (opts.reload) {
+			const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary" });
+			setIcon(reloadBtn.createEl("span", { cls: "wb-btn-icon" }), "refresh-cw");
+			reloadBtn.createEl("span", { text: "Reload" });
+			reloadBtn.onclick = async () => {
+				await this.render();
+				new Notice("World Builder reloaded.");
+			};
+		}
+		const btn = actions.createEl("button", { text: "+ New", cls: "wb-btn-primary" });
 		btn.onclick = onCreate;
 
 		const files = this.app.vault.getMarkdownFiles().filter((f) =>
@@ -244,7 +255,7 @@ class WorldBuilderView extends ItemView {
 
 			const card = list.createDiv("wb-card");
 			let body: HTMLElement = card;
-			if (showThumb) {
+			if (opts.thumbs) {
 				card.addClass("wb-card-with-thumb");
 				const thumb = card.createDiv("wb-thumb");
 				const src = this.findFirstImageSrc(content, file);

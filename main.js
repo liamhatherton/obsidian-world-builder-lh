@@ -122,7 +122,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
           badge: (_b = fm.role) != null ? _b : ""
         };
       },
-      true
+      { thumbs: true, reload: true }
     );
     await this.renderSection(
       contents.locations,
@@ -210,10 +210,20 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     }
     return null;
   }
-  async renderSection(container, folderPath, label, onCreate, getCard, showThumb = false) {
+  async renderSection(container, folderPath, label, onCreate, getCard, opts = {}) {
     const hdr = container.createDiv("wb-section-header");
     hdr.createEl("span", { text: label });
-    const btn = hdr.createEl("button", { text: "+ New", cls: "wb-btn-primary" });
+    const actions = hdr.createDiv("wb-section-actions");
+    if (opts.reload) {
+      const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary" });
+      (0, import_obsidian.setIcon)(reloadBtn.createEl("span", { cls: "wb-btn-icon" }), "refresh-cw");
+      reloadBtn.createEl("span", { text: "Reload" });
+      reloadBtn.onclick = async () => {
+        await this.render();
+        new import_obsidian.Notice("World Builder reloaded.");
+      };
+    }
+    const btn = actions.createEl("button", { text: "+ New", cls: "wb-btn-primary" });
     btn.onclick = onCreate;
     const files = this.app.vault.getMarkdownFiles().filter(
       (f) => f.path.startsWith(folderPath + "/")
@@ -229,7 +239,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       const { title, meta, badge } = getCard(fm);
       const card = list.createDiv("wb-card");
       let body = card;
-      if (showThumb) {
+      if (opts.thumbs) {
         card.addClass("wb-card-with-thumb");
         const thumb = card.createDiv("wb-thumb");
         const src = this.findFirstImageSrc(content, file);
