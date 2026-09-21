@@ -49,7 +49,11 @@ function readFrontmatter(content) {
   for (const line of match[1].split("\n")) {
     const idx = line.indexOf(":");
     if (idx === -1) continue;
-    result[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+    let value = line.slice(idx + 1).trim();
+    if (value.length >= 2 && (value.startsWith('"') && value.endsWith('"') || value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    result[line.slice(0, idx).trim()] = value;
   }
   return result;
 }
@@ -111,13 +115,14 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       "Characters",
       () => new CharacterModal(this.app, this.plugin, () => this.render()).open(),
       (fm) => {
-        var _a, _b, _c;
+        var _a, _b;
         return {
           title: (_a = fm.name) != null ? _a : "Unnamed",
-          meta: `${(_b = fm.role) != null ? _b : ""} ${fm.employer ? `\xB7 ${fm.employer}` : ""} ${fm.ship ? `\xB7 ${fm.ship}` : ""}`.trim(),
-          badge: (_c = fm.role) != null ? _c : ""
+          meta: [fm.employer, fm.ship].filter(Boolean).join(" \xB7 "),
+          badge: (_b = fm.role) != null ? _b : ""
         };
-      }
+      },
+      true
     );
     await this.renderSection(
       contents.locations,
@@ -176,7 +181,36 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       }
     );
   }
-  async renderSection(container, folderPath, label, onCreate, getCard) {
+  /** Returns a displayable URL for the first image embedded in a note, or null. */
+  findFirstImageSrc(content, file) {
+    var _a, _b;
+    const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
+    const re = /!\[\[([^\]]+)\]\]|!\[[^\]]*\]\((<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\)/g;
+    let m;
+    while ((m = re.exec(content)) !== null) {
+      let target;
+      if (m[1] !== void 0) {
+        target = m[1].split("|")[0].split("#")[0].trim();
+      } else {
+        target = ((_a = m[2]) != null ? _a : "").trim();
+        if (target.startsWith("<") && target.endsWith(">")) target = target.slice(1, -1);
+        if (/^https?:\/\//i.test(target)) {
+          if (IMG_EXT.test(target.split(/[?#]/)[0])) return target;
+          continue;
+        }
+        try {
+          target = decodeURIComponent(target);
+        } catch (e) {
+        }
+        target = target.split("#")[0];
+      }
+      if (!IMG_EXT.test(target)) continue;
+      const dest = (_b = this.app.metadataCache.getFirstLinkpathDest(target, file.path)) != null ? _b : this.app.vault.getAbstractFileByPath(target);
+      if (dest instanceof import_obsidian.TFile) return this.app.vault.getResourcePath(dest);
+    }
+    return null;
+  }
+  async renderSection(container, folderPath, label, onCreate, getCard, showThumb = false) {
     const hdr = container.createDiv("wb-section-header");
     hdr.createEl("span", { text: label });
     const btn = hdr.createEl("button", { text: "+ New", cls: "wb-btn-primary" });
@@ -194,13 +228,24 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       const fm = readFrontmatter(content);
       const { title, meta, badge } = getCard(fm);
       const card = list.createDiv("wb-card");
-      const titleEl = card.createDiv("wb-card-title");
+      let body = card;
+      if (showThumb) {
+        card.addClass("wb-card-with-thumb");
+        const thumb = card.createDiv("wb-thumb");
+        const src = this.findFirstImageSrc(content, file);
+        if (src) {
+          const img = thumb.createEl("img", { attr: { src, alt: "" } });
+          img.onerror = () => img.remove();
+        }
+        body = card.createDiv("wb-card-body");
+      }
+      const titleEl = body.createDiv("wb-card-title");
       titleEl.setText(title);
       if (badge) {
         const b = titleEl.createSpan({ cls: `wb-badge wb-badge-${badge.toLowerCase()}` });
         b.setText(badge);
       }
-      if (meta) card.createDiv({ cls: "wb-card-meta", text: meta });
+      if (meta) body.createDiv({ cls: "wb-card-meta", text: meta });
       card.onclick = () => this.app.workspace.getLeaf().openFile(file);
     }
   }

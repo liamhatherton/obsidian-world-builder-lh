@@ -52,7 +52,15 @@ function readFrontmatter(content: string): Record<string, string> {
 	for (const line of match[1].split("\n")) {
 		const idx = line.indexOf(":");
 		if (idx === -1) continue;
-		result[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+		let value = line.slice(idx + 1).trim();
+		if (
+			value.length >= 2 &&
+			((value.startsWith('"') && value.endsWith('"')) ||
+				(value.startsWith("'") && value.endsWith("'")))
+		) {
+			value = value.slice(1, -1);
+		}
+		result[line.slice(0, idx).trim()] = value;
 	}
 	return result;
 }
@@ -121,9 +129,10 @@ class WorldBuilderView extends ItemView {
 			() => new CharacterModal(this.app, this.plugin, () => this.render()).open(),
 			(fm) => ({
 				title: fm.name ?? "Unnamed",
-				meta: `${fm.role ?? ""} ${fm.employer ? `· ${fm.employer}` : ""} ${fm.ship ? `· ${fm.ship}` : ""}`.trim(),
+				meta: [fm.employer, fm.ship].filter(Boolean).join(" · "),
 				badge: fm.role ?? "",
-			})
+			}),
+			true
 		);
 
 		await this.renderSection(
@@ -175,12 +184,43 @@ class WorldBuilderView extends ItemView {
 		);
 	}
 
+	/** Returns a displayable URL for the first image embedded in a note, or null. */
+	findFirstImageSrc(content: string, file: TFile): string | null {
+		const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
+		const re = /!\[\[([^\]]+)\]\]|!\[[^\]]*\]\((<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\)/g;
+		let m: RegExpExecArray | null;
+		while ((m = re.exec(content)) !== null) {
+			let target: string;
+			if (m[1] !== undefined) {
+				// Wiki embed: ![[image.png|300]]
+				target = m[1].split("|")[0]!.split("#")[0]!.trim();
+			} else {
+				// Markdown embed: ![alt](path/to/image.png)
+				target = (m[2] ?? "").trim();
+				if (target.startsWith("<") && target.endsWith(">")) target = target.slice(1, -1);
+				if (/^https?:\/\//i.test(target)) {
+					if (IMG_EXT.test(target.split(/[?#]/)[0]!)) return target;
+					continue;
+				}
+				try { target = decodeURIComponent(target); } catch (e) { /* keep as-is */ }
+				target = target.split("#")[0]!;
+			}
+			if (!IMG_EXT.test(target)) continue;
+			const dest =
+				this.app.metadataCache.getFirstLinkpathDest(target, file.path) ??
+				this.app.vault.getAbstractFileByPath(target);
+			if (dest instanceof TFile) return this.app.vault.getResourcePath(dest);
+		}
+		return null;
+	}
+
 	async renderSection(
 		container: HTMLElement,
 		folderPath: string,
 		label: string,
 		onCreate: () => void,
-		getCard: (fm: Record<string, string>) => { title: string; meta: string; badge: string }
+		getCard: (fm: Record<string, string>) => { title: string; meta: string; badge: string },
+		showThumb = false
 	) {
 		const hdr = container.createDiv("wb-section-header");
 		hdr.createEl("span", { text: label });
@@ -203,13 +243,24 @@ class WorldBuilderView extends ItemView {
 			const { title, meta, badge } = getCard(fm);
 
 			const card = list.createDiv("wb-card");
-			const titleEl = card.createDiv("wb-card-title");
+			let body: HTMLElement = card;
+			if (showThumb) {
+				card.addClass("wb-card-with-thumb");
+				const thumb = card.createDiv("wb-thumb");
+				const src = this.findFirstImageSrc(content, file);
+				if (src) {
+					const img = thumb.createEl("img", { attr: { src, alt: "" } });
+					img.onerror = () => img.remove();
+				}
+				body = card.createDiv("wb-card-body");
+			}
+			const titleEl = body.createDiv("wb-card-title");
 			titleEl.setText(title);
 			if (badge) {
 				const b = titleEl.createSpan({ cls: `wb-badge wb-badge-${badge.toLowerCase()}` });
 				b.setText(badge);
 			}
-			if (meta) card.createDiv({ cls: "wb-card-meta", text: meta });
+			if (meta) body.createDiv({ cls: "wb-card-meta", text: meta });
 			card.onclick = () => this.app.workspace.getLeaf().openFile(file);
 		}
 	}
