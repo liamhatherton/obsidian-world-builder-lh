@@ -15,8 +15,12 @@ import {
 
 interface WorldBuilderSettings {
 	worldFolder: string;
+	/** Custom character order, keyed by lower-cased employer name -> ordered note paths. */
+	characterOrder: Record<string, string[]>;
+	/** Lower-cased employer names whose character sub-section is collapsed. */
+	collapsedEmployers: string[];
 }
-const DEFAULT_SETTINGS: WorldBuilderSettings = { worldFolder: "World" };
+const DEFAULT_SETTINGS: WorldBuilderSettings = { worldFolder: "World", characterOrder: {}, collapsedEmployers: [] };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -65,6 +69,13 @@ function readFrontmatter(content: string): Record<string, string> {
 	}
 	return result;
 }
+
+interface NoteEntry {
+	file: TFile;
+	content: string;
+	fm: Record<string, string>;
+}
+type CardFn = (fm: Record<string, string>) => { title: string; meta: string; badge: string };
 
 type WBTab = "characters" | "locations" | "employers" | "lore" | "timeline";
 
@@ -133,7 +144,7 @@ class WorldBuilderView extends ItemView {
 				meta: [fm.employer, fm.ship].filter(Boolean).join(" · "),
 				badge: fm.role ?? "",
 			}),
-			{ thumbs: true, reload: true }
+			{ thumbs: true, employerGroups: true, stackBadge: true }
 		);
 
 		await this.renderSection(
@@ -221,12 +232,12 @@ class WorldBuilderView extends ItemView {
 		label: string,
 		onCreate: () => void,
 		getCard: (fm: Record<string, string>) => { title: string; meta: string; badge: string },
-		opts: { thumbs?: boolean; reload?: boolean } = {}
+		opts: { thumbs?: boolean; reload?: boolean; employerGroups?: boolean; stackBadge?: boolean } = {}
 	) {
 		const hdr = container.createDiv("wb-section-header");
 		hdr.createEl("span", { text: label });
 		const actions = hdr.createDiv("wb-section-actions");
-		if (opts.reload) {
+		if (opts.reload ?? true) {
 			const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary" });
 			setIcon(reloadBtn.createEl("span", { cls: "wb-btn-icon" }), "refresh-cw");
 			reloadBtn.createEl("span", { text: "Reload" });
@@ -242,38 +253,195 @@ class WorldBuilderView extends ItemView {
 			f.path.startsWith(folderPath + "/")
 		);
 
-		const list = container.createDiv("wb-list");
 		if (files.length === 0) {
-			list.createDiv({ cls: "wb-empty", text: `No ${label.toLowerCase()} yet.` });
+			container.createDiv("wb-list").createDiv({ cls: "wb-empty", text: `No ${label.toLowerCase()} yet.` });
 			return;
 		}
 
+		const entries: NoteEntry[] = [];
 		for (const file of files) {
 			const content = await this.app.vault.cachedRead(file);
-			const fm = readFrontmatter(content);
-			const { title, meta, badge } = getCard(fm);
-
-			const card = list.createDiv("wb-card");
-			let body: HTMLElement = card;
-			if (opts.thumbs) {
-				card.addClass("wb-card-with-thumb");
-				const thumb = card.createDiv("wb-thumb");
-				const src = this.findFirstImageSrc(content, file);
-				if (src) {
-					const img = thumb.createEl("img", { attr: { src, alt: "" } });
-					img.onerror = () => img.remove();
-				}
-				body = card.createDiv("wb-card-body");
-			}
-			const titleEl = body.createDiv("wb-card-title");
-			titleEl.setText(title);
-			if (badge) {
-				const b = titleEl.createSpan({ cls: `wb-badge wb-badge-${badge.toLowerCase()}` });
-				b.setText(badge);
-			}
-			if (meta) body.createDiv({ cls: "wb-card-meta", text: meta });
-			card.onclick = () => this.app.workspace.getLeaf().openFile(file);
+			entries.push({ file, content, fm: readFrontmatter(content) });
 		}
+
+		if (!opts.employerGroups) {
+			const list = container.createDiv("wb-list");
+			for (const entry of entries) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge);
+			return;
+		}
+
+		// Characters: one sub-section per employer, each with its own drag-to-reorder list.
+		const groups = new Map<string, { label: string; items: NoteEntry[] }>();
+		for (const entry of entries) {
+			const employer = (entry.fm.employer ?? "").trim();
+			const key = employer.toLowerCase();
+			let group = groups.get(key);
+			if (!group) {
+				group = { label: employer || "No Employer", items: [] };
+				groups.set(key, group);
+			}
+			group.items.push(entry);
+		}
+
+		// Alphabetical by employer, with characters who have no employer last.
+		const orderedGroups = [...groups.entries()].sort(
+			([a], [b]) => (a === "" ? 1 : 0) - (b === "" ? 1 : 0) || a.localeCompare(b)
+		);
+
+		for (const [key, group] of orderedGroups) {
+			const header = container.createDiv("wb-group-header");
+			header.setAttribute("role", "button");
+			header.setAttribute("tabindex", "0");
+			setIcon(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
+			header.createEl("span", { cls: "wb-group-title", text: group.label });
+			const list = container.createDiv("wb-list");
+
+			const applyCollapsed = (collapsed: boolean) => {
+				header.classList.toggle("is-collapsed", collapsed);
+				list.classList.toggle("is-collapsed", collapsed);
+				header.setAttribute("aria-expanded", String(!collapsed));
+			};
+			applyCollapsed(this.plugin.settings.collapsedEmployers.includes(key));
+
+			const toggleCollapsed = async () => {
+				const settings = this.plugin.settings;
+				const collapse = !settings.collapsedEmployers.includes(key);
+				settings.collapsedEmployers = collapse
+					? [...settings.collapsedEmployers, key]
+					: settings.collapsedEmployers.filter((k) => k !== key);
+				applyCollapsed(collapse);
+				await this.plugin.saveSettings();
+			};
+			header.onclick = toggleCollapsed;
+			header.onkeydown = (e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					toggleCollapsed();
+				}
+			};
+
+			// Saved order first; anything not yet ordered keeps its default position after them.
+			const saved = this.plugin.settings.characterOrder[key] ?? [];
+			const rank = (path: string) => {
+				const i = saved.indexOf(path);
+				return i === -1 ? saved.length : i;
+			};
+			const items = group.items
+				.map((entry, index) => ({ entry, index }))
+				.sort((a, b) => rank(a.entry.file.path) - rank(b.entry.file.path) || a.index - b.index)
+				.map(({ entry }) => entry);
+
+			for (const entry of items) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge);
+			this.enableReorder(list, key);
+		}
+	}
+
+	private renderCard(
+		parent: HTMLElement,
+		entry: NoteEntry,
+		getCard: CardFn,
+		thumbs: boolean,
+		stackBadge: boolean
+	): HTMLElement {
+		const { file, content, fm } = entry;
+		const { title, meta, badge } = getCard(fm);
+
+		const card = parent.createDiv("wb-card");
+		card.setAttribute("data-path", file.path);
+		let body: HTMLElement = card;
+		if (thumbs) {
+			card.addClass("wb-card-with-thumb");
+			const thumb = card.createDiv("wb-thumb");
+			const src = this.findFirstImageSrc(content, file);
+			if (src) {
+				const img = thumb.createEl("img", { attr: { src, alt: "", draggable: "false" } });
+				img.onerror = () => img.remove();
+			}
+			body = card.createDiv("wb-card-body");
+		}
+		const titleEl = body.createDiv("wb-card-title");
+		titleEl.setText(title);
+		if (badge) {
+			// stackBadge: badge on its own line under the name; otherwise inline beside it
+			const badgeHost = stackBadge ? body.createDiv("wb-card-badge-row") : titleEl;
+			const b = badgeHost.createSpan({ cls: `wb-badge wb-badge-${badge.toLowerCase()}` });
+			b.setText(badge);
+		}
+		if (meta) body.createDiv({ cls: "wb-card-meta", text: meta });
+		card.onclick = () => this.app.workspace.getLeaf().openFile(file);
+		return card;
+	}
+
+	/**
+	 * Makes the cards in one employer's list drag-sortable. Each list only accepts cards
+	 * that were picked up from that same list, so characters can't be moved between employers.
+	 * The new order is saved to plugin data (notes themselves are never modified).
+	 */
+	private enableReorder(list: HTMLElement, groupKey: string) {
+		let dragged: HTMLElement | null = null;
+		let dropTarget: HTMLElement | null = null;
+		let dropAfter = false;
+
+		const cardAt = (t: EventTarget | null): HTMLElement | null =>
+			t instanceof HTMLElement ? t.closest<HTMLElement>(".wb-card") : null;
+		const clearMarks = () => {
+			list.querySelectorAll(".wb-drop-before, .wb-drop-after").forEach((el) =>
+				el.classList.remove("wb-drop-before", "wb-drop-after")
+			);
+			dropTarget = null;
+		};
+
+		list.querySelectorAll<HTMLElement>(".wb-card").forEach((card) =>
+			card.setAttribute("draggable", "true")
+		);
+
+		list.addEventListener("dragstart", (e) => {
+			const card = cardAt(e.target);
+			if (!card || !e.dataTransfer) return;
+			dragged = card;
+			e.dataTransfer.effectAllowed = "move";
+			// Custom type only, so dropping onto a note or editor doesn't paste anything.
+			e.dataTransfer.setData("application/x-wb-character", card.getAttribute("data-path") ?? "");
+			window.setTimeout(() => card.classList.add("wb-dragging"), 0);
+		});
+
+		list.addEventListener("dragend", () => {
+			dragged?.classList.remove("wb-dragging");
+			dragged = null;
+			clearMarks();
+		});
+
+		list.addEventListener("dragover", (e) => {
+			if (!dragged) return; // not picked up from this employer's list: not a valid drop
+			e.preventDefault();
+			if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+			const target = cardAt(e.target);
+			if (!target) return; // in a gap between cards: keep the last indicator
+			clearMarks();
+			if (target === dragged) return;
+			const r = target.getBoundingClientRect();
+			dropTarget = target;
+			dropAfter = e.clientY >= r.top + r.height / 2;
+			target.classList.add(dropAfter ? "wb-drop-after" : "wb-drop-before");
+		});
+
+		list.addEventListener("dragleave", (e) => {
+			if (!list.contains(e.relatedTarget as Node | null)) clearMarks();
+		});
+
+		list.addEventListener("drop", async (e) => {
+			if (!dragged) return;
+			e.preventDefault();
+			const moving = dragged;
+			if (dropTarget && dropTarget !== moving) {
+				list.insertBefore(moving, dropAfter ? dropTarget.nextSibling : dropTarget);
+				this.plugin.settings.characterOrder[groupKey] = Array.from(
+					list.querySelectorAll<HTMLElement>(".wb-card")
+				).map((c) => c.getAttribute("data-path") ?? "");
+				await this.plugin.saveSettings();
+			}
+			clearMarks();
+		});
 	}
 }
 
@@ -735,6 +903,17 @@ export default class WorldBuilderPlugin extends Plugin {
 			callback: () => new TimelineModal(this.app, this, () => this.refreshSidebar()).open(),
 		});
 
+		this.registerEvent(
+			this.app.vault.on("rename", async (file, oldPath) => {
+				let changed = false;
+				for (const order of Object.values(this.settings.characterOrder)) {
+					const i = order.indexOf(oldPath);
+					if (i !== -1) { order[i] = file.path; changed = true; }
+				}
+				if (changed) await this.saveSettings();
+			})
+		);
+
 		this.addSettingTab(new WorldBuilderSettingTab(this.app, this));
 	}
 
@@ -756,7 +935,10 @@ export default class WorldBuilderPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const data = await this.loadData();
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+		this.settings.characterOrder = data?.characterOrder ?? {};
+		this.settings.collapsedEmployers = data?.collapsedEmployers ?? [];
 	}
 	async saveSettings() {
 		await this.saveData(this.settings);
