@@ -57,7 +57,7 @@ function readFrontmatter(content: string): Record<string, string> {
 	return result;
 }
 
-type WBTab = "characters" | "locations" | "factions" | "lore" | "timeline";
+type WBTab = "characters" | "locations" | "employers" | "lore" | "timeline";
 
 // ─── Sidebar View ─────────────────────────────────────────────────────────────
 
@@ -91,7 +91,7 @@ class WorldBuilderView extends ItemView {
 		const tabs: { id: WBTab; label: string }[] = [
 			{ id: "characters", label: "Characters" },
 			{ id: "locations", label: "Locations" },
-			{ id: "factions", label: "Factions" },
+			{ id: "employers", label: "Employers" },
 			{ id: "lore", label: "Lore" },
 			{ id: "timeline", label: "Timeline" },
 		];
@@ -121,7 +121,7 @@ class WorldBuilderView extends ItemView {
 			() => new CharacterModal(this.app, this.plugin, () => this.render()).open(),
 			(fm) => ({
 				title: fm.name ?? "Unnamed",
-				meta: `${fm.role ?? ""} ${fm.faction ? `· ${fm.faction}` : ""}`.trim(),
+				meta: `${fm.role ?? ""} ${fm.employer ? `· ${fm.employer}` : ""}`.trim(),
 				badge: fm.role ?? "",
 			})
 		);
@@ -139,10 +139,10 @@ class WorldBuilderView extends ItemView {
 		);
 
 		await this.renderSection(
-			contents.factions!,
-			`${folder}/Factions`,
-			"Factions",
-			() => new FactionModal(this.app, this.plugin, () => this.render()).open(),
+			contents.employers!,
+			`${folder}/Employers`,
+			"Employers",
+			() => new EmployerModal(this.app, this.plugin, () => this.render()).open(),
 			(fm) => ({
 				title: fm.name ?? "Unnamed",
 				meta: fm.goals ?? "",
@@ -221,7 +221,7 @@ class CharacterModal extends Modal {
 	plugin: WorldBuilderPlugin;
 	onDone: () => void;
 	data = {
-		name: "", role: "protagonist", age: "", faction: "",
+		name: "", role: "protagonist", age: "", employer: "",
 		physicalDesc: "", personality: "", goals: "", secrets: ""
 	};
 
@@ -248,8 +248,8 @@ class CharacterModal extends Modal {
 		new Setting(contentEl).setName("Age").addText((t) => {
 			t.setPlaceholder("e.g. 34").onChange((v) => (this.data.age = v));
 		});
-		new Setting(contentEl).setName("Faction").addText((t) => {
-			t.setPlaceholder("Faction name").onChange((v) => (this.data.faction = v));
+		new Setting(contentEl).setName("Employer").addText((t) => {
+			t.setPlaceholder("Employer name").onChange((v) => (this.data.employer = v));
 		});
 		new Setting(contentEl).setName("Physical Description").addTextArea((t) => {
 			t.inputEl.addClass("wb-textarea");
@@ -281,7 +281,7 @@ class CharacterModal extends Modal {
 			`name: "${this.data.name}"`,
 			`role: ${this.data.role}`,
 			`age: "${this.data.age}"`,
-			`faction: "${this.data.faction}"`,
+			`employer: "${this.data.employer}"`,
 			`type: character`,
 			"---",
 			"",
@@ -392,7 +392,7 @@ class LocationModal extends Modal {
 	onClose() { this.contentEl.empty(); }
 }
 
-class FactionModal extends Modal {
+class EmployerModal extends Modal {
 	plugin: WorldBuilderPlugin;
 	onDone: () => void;
 	data = {
@@ -408,10 +408,10 @@ class FactionModal extends Modal {
 	onOpen() {
 		const { contentEl } = this;
 		contentEl.addClass("wb-modal");
-		contentEl.createEl("h2", { text: "New Faction" });
+		contentEl.createEl("h2", { text: "New Employer" });
 
 		new Setting(contentEl).setName("Name").addText((t) => {
-			t.setPlaceholder("Faction name").onChange((v) => (this.data.name = v));
+			t.setPlaceholder("Employer name").onChange((v) => (this.data.name = v));
 		});
 		new Setting(contentEl).setName("Alignment").addDropdown((d) => {
 			["lawful", "neutral", "chaotic"].forEach((o) =>
@@ -441,7 +441,7 @@ class FactionModal extends Modal {
 
 	async submit() {
 		if (!this.data.name.trim()) { new Notice("Name is required."); return; }
-		const folder = `${this.plugin.settings.worldFolder}/Factions`;
+		const folder = `${this.plugin.settings.worldFolder}/Employers`;
 		const enemyLinks = this.data.enemies.split(",").filter(Boolean).map((e) => `[[${e.trim()}]]`).join(", ");
 		const allyLinks = this.data.allies.split(",").filter(Boolean).map((a) => `[[${a.trim()}]]`).join(", ");
 		const lines = [
@@ -449,7 +449,7 @@ class FactionModal extends Modal {
 			`name: "${this.data.name}"`,
 			`alignment: ${this.data.alignment}`,
 			`goals: "${this.data.goals.replace(/"/g, "'")}"`,
-			`entry_type: faction`,
+			`entry_type: employer`,
 			"---",
 			"",
 			`# ${this.data.name}`,
@@ -460,7 +460,7 @@ class FactionModal extends Modal {
 		if (allyLinks) lines.push(`**Allies:** ${allyLinks}`);
 		lines.push("", "## Goals", this.data.goals || "_None provided._", "", "## Description", this.data.description || "_None provided._");
 		const file = await createNote(this.app, folder, this.data.name, lines.join("\n"));
-		new Notice(`Faction "${this.data.name}" created.`);
+		new Notice(`Employer "${this.data.name}" created.`);
 		this.close();
 		this.onDone();
 		await this.app.workspace.getLeaf().openFile(file);
@@ -654,9 +654,9 @@ export default class WorldBuilderPlugin extends Plugin {
 			callback: () => new LocationModal(this.app, this, () => this.refreshSidebar()).open(),
 		});
 		this.addCommand({
-			id: "new-faction",
-			name: "New Faction",
-			callback: () => new FactionModal(this.app, this, () => this.refreshSidebar()).open(),
+			id: "new-employer",
+			name: "New Employer",
+			callback: () => new EmployerModal(this.app, this, () => this.refreshSidebar()).open(),
 		});
 		this.addCommand({
 			id: "new-lore",

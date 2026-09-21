@@ -1,12 +1,12 @@
 # World Builder
 
-A fiction world-building toolkit for Obsidian: characters, locations, factions, lore entries, and timeline events.
+A fiction world-building toolkit for Obsidian: characters, locations, employers, lore entries, and timeline events.
 
 ## Features
 
-- **Characters** — name, role, age, faction, physical description, personality, goals, secrets
+- **Characters** — name, role, age, employer, physical description, personality, goals, secrets
 - **Locations** — name, type, parent location, description, inhabitants, secrets
-- **Factions** — name, alignment, goals, enemies, allies, description
+- **Employers** — name, alignment, goals, enemies, allies, description
 - **Lore Entries** — title, category (history/magic/religion/culture/other), content
 - **Timeline Events** — date/era, title, description, linked characters/locations
 - **World Sidebar** — tabbed view across all five entry types

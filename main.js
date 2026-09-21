@@ -44,13 +44,11 @@ async function createNote(app, folder, filename, content) {
 }
 function readFrontmatter(content) {
   const match = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!match)
-    return {};
+  if (!match) return {};
   const result = {};
   for (const line of match[1].split("\n")) {
     const idx = line.indexOf(":");
-    if (idx === -1)
-      continue;
+    if (idx === -1) continue;
     result[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
   }
   return result;
@@ -86,15 +84,14 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     const tabs = [
       { id: "characters", label: "Characters" },
       { id: "locations", label: "Locations" },
-      { id: "factions", label: "Factions" },
+      { id: "employers", label: "Employers" },
       { id: "lore", label: "Lore" },
       { id: "timeline", label: "Timeline" }
     ];
     const contents = {};
     tabs.forEach(({ id, label }) => {
       const btn = tabBar.createEl("button", { text: label, cls: "wb-tab" });
-      if (id === this.activeTab)
-        btn.addClass("active");
+      if (id === this.activeTab) btn.addClass("active");
       btn.onclick = () => {
         var _a;
         this.activeTab = id;
@@ -104,8 +101,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         (_a = contents[id]) == null ? void 0 : _a.addClass("active");
       };
       const pane = containerEl.createDiv("wb-tab-content");
-      if (id === this.activeTab)
-        pane.addClass("active");
+      if (id === this.activeTab) pane.addClass("active");
       contents[id] = pane;
     });
     const folder = this.plugin.settings.worldFolder;
@@ -118,7 +114,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         var _a, _b, _c;
         return {
           title: (_a = fm.name) != null ? _a : "Unnamed",
-          meta: `${(_b = fm.role) != null ? _b : ""} ${fm.faction ? `\xB7 ${fm.faction}` : ""}`.trim(),
+          meta: `${(_b = fm.role) != null ? _b : ""} ${fm.employer ? `\xB7 ${fm.employer}` : ""}`.trim(),
           badge: (_c = fm.role) != null ? _c : ""
         };
       }
@@ -138,10 +134,10 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       }
     );
     await this.renderSection(
-      contents.factions,
-      `${folder}/Factions`,
-      "Factions",
-      () => new FactionModal(this.app, this.plugin, () => this.render()).open(),
+      contents.employers,
+      `${folder}/Employers`,
+      "Employers",
+      () => new EmployerModal(this.app, this.plugin, () => this.render()).open(),
       (fm) => {
         var _a, _b, _c;
         return {
@@ -204,8 +200,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         const b = titleEl.createSpan({ cls: `wb-badge wb-badge-${badge.toLowerCase()}` });
         b.setText(badge);
       }
-      if (meta)
-        card.createDiv({ cls: "wb-card-meta", text: meta });
+      if (meta) card.createDiv({ cls: "wb-card-meta", text: meta });
       card.onclick = () => this.app.workspace.getLeaf().openFile(file);
     }
   }
@@ -217,7 +212,7 @@ var CharacterModal = class extends import_obsidian.Modal {
       name: "",
       role: "protagonist",
       age: "",
-      faction: "",
+      employer: "",
       physicalDesc: "",
       personality: "",
       goals: "",
@@ -242,8 +237,8 @@ var CharacterModal = class extends import_obsidian.Modal {
     new import_obsidian.Setting(contentEl).setName("Age").addText((t) => {
       t.setPlaceholder("e.g. 34").onChange((v) => this.data.age = v);
     });
-    new import_obsidian.Setting(contentEl).setName("Faction").addText((t) => {
-      t.setPlaceholder("Faction name").onChange((v) => this.data.faction = v);
+    new import_obsidian.Setting(contentEl).setName("Employer").addText((t) => {
+      t.setPlaceholder("Employer name").onChange((v) => this.data.employer = v);
     });
     new import_obsidian.Setting(contentEl).setName("Physical Description").addTextArea((t) => {
       t.inputEl.addClass("wb-textarea");
@@ -276,7 +271,7 @@ var CharacterModal = class extends import_obsidian.Modal {
       `name: "${this.data.name}"`,
       `role: ${this.data.role}`,
       `age: "${this.data.age}"`,
-      `faction: "${this.data.faction}"`,
+      `employer: "${this.data.employer}"`,
       `type: character`,
       "---",
       "",
@@ -387,7 +382,7 @@ var LocationModal = class extends import_obsidian.Modal {
     this.contentEl.empty();
   }
 };
-var FactionModal = class extends import_obsidian.Modal {
+var EmployerModal = class extends import_obsidian.Modal {
   constructor(app, plugin, onDone) {
     super(app);
     this.data = {
@@ -404,9 +399,9 @@ var FactionModal = class extends import_obsidian.Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.addClass("wb-modal");
-    contentEl.createEl("h2", { text: "New Faction" });
+    contentEl.createEl("h2", { text: "New Employer" });
     new import_obsidian.Setting(contentEl).setName("Name").addText((t) => {
-      t.setPlaceholder("Faction name").onChange((v) => this.data.name = v);
+      t.setPlaceholder("Employer name").onChange((v) => this.data.name = v);
     });
     new import_obsidian.Setting(contentEl).setName("Alignment").addDropdown((d) => {
       ["lawful", "neutral", "chaotic"].forEach(
@@ -437,7 +432,7 @@ var FactionModal = class extends import_obsidian.Modal {
       new import_obsidian.Notice("Name is required.");
       return;
     }
-    const folder = `${this.plugin.settings.worldFolder}/Factions`;
+    const folder = `${this.plugin.settings.worldFolder}/Employers`;
     const enemyLinks = this.data.enemies.split(",").filter(Boolean).map((e) => `[[${e.trim()}]]`).join(", ");
     const allyLinks = this.data.allies.split(",").filter(Boolean).map((a) => `[[${a.trim()}]]`).join(", ");
     const lines = [
@@ -445,20 +440,18 @@ var FactionModal = class extends import_obsidian.Modal {
       `name: "${this.data.name}"`,
       `alignment: ${this.data.alignment}`,
       `goals: "${this.data.goals.replace(/"/g, "'")}"`,
-      `entry_type: faction`,
+      `entry_type: employer`,
       "---",
       "",
       `# ${this.data.name}`,
       "",
       `**Alignment:** ${this.data.alignment}`
     ];
-    if (enemyLinks)
-      lines.push(`**Enemies:** ${enemyLinks}`);
-    if (allyLinks)
-      lines.push(`**Allies:** ${allyLinks}`);
+    if (enemyLinks) lines.push(`**Enemies:** ${enemyLinks}`);
+    if (allyLinks) lines.push(`**Allies:** ${allyLinks}`);
     lines.push("", "## Goals", this.data.goals || "_None provided._", "", "## Description", this.data.description || "_None provided._");
     const file = await createNote(this.app, folder, this.data.name, lines.join("\n"));
-    new import_obsidian.Notice(`Faction "${this.data.name}" created.`);
+    new import_obsidian.Notice(`Employer "${this.data.name}" created.`);
     this.close();
     this.onDone();
     await this.app.workspace.getLeaf().openFile(file);
@@ -576,10 +569,8 @@ var TimelineModal = class extends import_obsidian.Modal {
       "",
       `**Date/Era:** ${this.data.date || "_Unknown_"}`
     ];
-    if (charLinks)
-      lines.push(`**Characters:** ${charLinks}`);
-    if (locLinks)
-      lines.push(`**Locations:** ${locLinks}`);
+    if (charLinks) lines.push(`**Characters:** ${charLinks}`);
+    if (locLinks) lines.push(`**Locations:** ${locLinks}`);
     lines.push("", "## Description", this.data.description || "_None provided._");
     const file = await createNote(this.app, folder, filename, lines.join("\n"));
     new import_obsidian.Notice(`Timeline event "${this.data.title}" created.`);
@@ -629,9 +620,9 @@ var WorldBuilderPlugin = class extends import_obsidian.Plugin {
       callback: () => new LocationModal(this.app, this, () => this.refreshSidebar()).open()
     });
     this.addCommand({
-      id: "new-faction",
-      name: "New Faction",
-      callback: () => new FactionModal(this.app, this, () => this.refreshSidebar()).open()
+      id: "new-employer",
+      name: "New Employer",
+      callback: () => new EmployerModal(this.app, this, () => this.refreshSidebar()).open()
     });
     this.addCommand({
       id: "new-lore",
