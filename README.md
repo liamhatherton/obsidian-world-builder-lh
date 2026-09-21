@@ -10,6 +10,7 @@ A fiction world-building toolkit for Obsidian: characters, locations, employers,
 - **Lore Entries** — title, category (history/tech/religion/culture/other), content
 - **Timeline Events** — date/era, title, description, linked characters/locations
 - **World Sidebar** — tabbed view across all five entry types
+- **Search** — a search bar pinned under the section header on every tab (each tab keeps its own text); type to hide whatever doesn't match, all words must match. Characters are matched on name, employer, ship and home; the other tabs on the name and the text of the note
 
 ## Settings
 

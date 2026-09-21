@@ -60,11 +60,31 @@ function readFrontmatter(content) {
 function labeledLine(pairs) {
   return pairs.filter(([, value]) => value).map(([label, value]) => `${label}:\xA0${value}`).join(" \u2022 ");
 }
+function normalizeForSearch(s) {
+  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+function documentSearchText(content, fm) {
+  const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "").replace(/!\[\[[^\]]*\]\]/g, " ").replace(/!\[[^\]]*\]\([^)]*\)/g, " ").replace(/\[\[[^\]|]*\|([^\]]*)\]\]/g, "$1").replace(/\[\[([^\]]*)\]\]/g, "$1").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/<[^>]+>/g, " ");
+  const values = Object.entries(fm).filter(([key]) => key !== "entry_type").map(([, value]) => value);
+  return [...values, body].join(" ");
+}
+var SEARCH_HINTS = {
+  characters: { noun: "characters", tip: "Matches name, employer, ship and home" },
+  locations: { noun: "locations", tip: "Matches the name and the text of the note" },
+  employers: { noun: "employers", tip: "Matches the name and the text of the note" },
+  lore: { noun: "lore", tip: "Matches the title and the text of the note" },
+  timeline: { noun: "timeline", tip: "Matches the title and the text of the note" }
+};
 var VIEW_TYPE = "world-builder-sidebar";
 var WorldBuilderView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.activeTab = "characters";
+    /** What is typed in the search bar for each tab; kept here so it survives a redraw (Reload, new note, ...). */
+    this.searchQueries = { characters: "", locations: "", employers: "", lore: "", timeline: "" };
+    this.searchTargets = {};
+    /** Normalised text each card is matched against. */
+    this.searchIndex = /* @__PURE__ */ new WeakMap();
     this.plugin = plugin;
   }
   getViewType() {
@@ -85,6 +105,8 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     var _a, _b;
     const { containerEl } = this;
     const scrollTop = (_b = (_a = containerEl.querySelector(".wb-scroll")) == null ? void 0 : _a.scrollTop) != null ? _b : 0;
+    const oldSearch = containerEl.querySelector(".wb-search-input");
+    const searchHadFocus = !!oldSearch && containerEl.ownerDocument.activeElement === oldSearch;
     containerEl.empty();
     containerEl.addClass("wb-sidebar");
     const fixed = containerEl.createDiv("wb-fixed");
@@ -114,6 +136,8 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         });
         (_a2 = contents[id]) == null ? void 0 : _a2.head.addClass("active");
         (_b2 = contents[id]) == null ? void 0 : _b2.body.addClass("active");
+        showTabSearch();
+        updateShadow();
       };
       const pane = {
         head: fixed.createDiv("wb-tab-content wb-tab-head"),
@@ -124,7 +148,52 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         pane.body.addClass("active");
       }
       contents[id] = pane;
+      this.searchTargets[id] = pane.body;
     });
+    const searchBox = fixed.createDiv("wb-search");
+    (0, import_obsidian.setIcon)(searchBox.createEl("span", { cls: "wb-search-icon" }), "search");
+    const searchInput = searchBox.createEl("input", {
+      cls: "wb-search-input",
+      attr: { type: "text", spellcheck: "false" }
+    });
+    const clearBtn = searchBox.createEl("button", {
+      cls: "wb-search-clear",
+      attr: { type: "button", "aria-label": "Clear search" }
+    });
+    (0, import_obsidian.setIcon)(clearBtn, "x");
+    const syncClear = () => clearBtn.classList.toggle("is-visible", searchInput.value.length > 0);
+    const showTabSearch = () => {
+      const hint = SEARCH_HINTS[this.activeTab];
+      searchInput.value = this.searchQueries[this.activeTab];
+      searchInput.setAttribute("placeholder", `Search ${hint.noun}\u2026`);
+      searchInput.setAttribute("title", hint.tip);
+      searchInput.setAttribute("aria-label", `Search ${hint.noun}`);
+      syncClear();
+    };
+    const updateShadow = () => fixed.classList.toggle("is-scrolled", scroll.scrollTop > 0);
+    scroll.addEventListener("scroll", updateShadow, { passive: true });
+    const setQuery = (q) => {
+      this.searchQueries[this.activeTab] = q;
+      syncClear();
+      this.applySearch(this.activeTab);
+      scroll.scrollTop = 0;
+      updateShadow();
+    };
+    searchInput.addEventListener("input", () => setQuery(searchInput.value));
+    searchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && searchInput.value) {
+        e.preventDefault();
+        e.stopPropagation();
+        searchInput.value = "";
+        setQuery("");
+      }
+    });
+    clearBtn.addEventListener("click", () => {
+      searchInput.value = "";
+      setQuery("");
+      searchInput.focus();
+    });
+    showTabSearch();
     const folder = this.plugin.settings.worldFolder;
     await this.renderSection(
       contents.characters,
@@ -140,7 +209,9 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
             labeledLine([["Age", fm.age], ["Home", fm.home]]),
             labeledLine([["Employer", fm.employer], ["Ship", fm.ship]])
           ].filter(Boolean).join("\n"),
-          badge: (_b2 = fm.role) != null ? _b2 : ""
+          badge: (_b2 = fm.role) != null ? _b2 : "",
+          // What the search bar matches against.
+          search: [fm.name, fm.employer, fm.ship, fm.home].filter(Boolean).join(" ")
         };
       },
       { thumbs: true, employerGroups: true, stackBadge: true }
@@ -202,6 +273,59 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       }
     );
     scroll.scrollTop = scrollTop;
+    for (const { id } of tabs) this.applySearch(id);
+    updateShadow();
+    if (searchHadFocus) {
+      searchInput.focus();
+      const end = searchInput.value.length;
+      searchInput.setSelectionRange(end, end);
+    }
+  }
+  /**
+   * Hides the cards on one tab that don't match its search text (and, on Characters, any employer
+   * section left empty). Every word typed must appear in the card's searchable text, in any order,
+   * ignoring case and accents. Works on the existing cards, so nothing is re-read or re-rendered.
+   * Characters are matched on name, employer, ship and home; other tabs on the name and the note's text.
+   */
+  applySearch(tab) {
+    var _a;
+    const body = this.searchTargets[tab];
+    if (!body) return;
+    const query = this.searchQueries[tab];
+    const terms = normalizeForSearch(query).split(/\s+/).filter(Boolean);
+    const searching = terms.length > 0;
+    body.classList.toggle("is-searching", searching);
+    const filterList = (list) => {
+      let shown = 0;
+      list.querySelectorAll(".wb-card").forEach((card) => {
+        var _a2;
+        const haystack = (_a2 = this.searchIndex.get(card)) != null ? _a2 : "";
+        const match = terms.every((t) => haystack.includes(t));
+        card.classList.toggle("wb-filtered-out", !match);
+        if (match) shown++;
+      });
+      return shown;
+    };
+    let matches = 0;
+    body.querySelectorAll(".wb-group-header").forEach((header) => {
+      const list = header.nextElementSibling;
+      if (!list || !list.classList.contains("wb-list")) return;
+      const shown = filterList(list);
+      const hideGroup = searching && shown === 0;
+      header.classList.toggle("wb-filtered-out", hideGroup);
+      list.classList.toggle("wb-filtered-out", hideGroup);
+      matches += shown;
+    });
+    body.querySelectorAll(":scope > .wb-list").forEach((list) => {
+      var _a2;
+      if ((_a2 = list.previousElementSibling) == null ? void 0 : _a2.classList.contains("wb-group-header")) return;
+      matches += filterList(list);
+    });
+    const none = body.querySelector(".wb-no-results");
+    if (none) {
+      none.textContent = `No ${(_a = none.getAttribute("data-noun")) != null ? _a : "entries"} match \u201C${query.trim()}\u201D.`;
+      none.classList.toggle("wb-filtered-out", !(searching && matches === 0));
+    }
   }
   /** Returns a displayable URL for the first image embedded in a note, or null. */
   findFirstImageSrc(content, file) {
@@ -264,6 +388,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     if (!opts.employerGroups) {
       const list = container.createDiv("wb-list");
       for (const entry of entries) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge);
+      this.createNoResultsLine(container, label);
       return;
     }
     const groups = /* @__PURE__ */ new Map();
@@ -294,6 +419,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       };
       applyCollapsed(this.plugin.settings.collapsedEmployers.includes(key));
       const toggleCollapsed = async () => {
+        if (normalizeForSearch(this.searchQueries.characters).trim()) return;
         const settings = this.plugin.settings;
         const collapse = !settings.collapsedEmployers.includes(key);
         settings.collapsedEmployers = collapse ? [...settings.collapsedEmployers, key] : settings.collapsedEmployers.filter((k) => k !== key);
@@ -316,13 +442,22 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       for (const entry of items) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge);
       this.enableReorder(list, key);
     }
+    this.createNoResultsLine(container, label);
+  }
+  /** The "No ... match" line; hidden until applySearch() finds nothing. */
+  createNoResultsLine(container, label) {
+    container.createDiv({
+      cls: "wb-empty wb-no-results wb-filtered-out",
+      attr: { "data-noun": label.toLowerCase() }
+    });
   }
   renderCard(parent, entry, getCard, thumbs, stackBadge) {
     const { file, content, fm } = entry;
-    const { title, meta, badge } = getCard(fm);
+    const { title, meta, badge, search } = getCard(fm);
     const card = parent.createDiv("wb-card");
     if (stackBadge) card.addClass("wb-card-stacked");
     card.setAttribute("data-path", file.path);
+    this.searchIndex.set(card, normalizeForSearch(search != null ? search : `${title} ${documentSearchText(content, fm)}`));
     let body = card;
     if (thumbs) {
       card.addClass("wb-card-with-thumb");

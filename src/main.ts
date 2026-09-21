@@ -78,6 +78,31 @@ function labeledLine(pairs: ReadonlyArray<readonly [string, string | undefined]>
 		.join(" • ");
 }
 
+/** Lower-cases and strips accents, so "zoe" finds "Zoë" and "desmond" finds "Desmond". */
+function normalizeForSearch(s: string): string {
+	return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+/**
+ * Everything a note "says", for searching: its frontmatter values (not the keys) plus its body,
+ * with markup that isn't visible text removed (embeds, link targets, HTML tags such as the
+ * <font color=...> around headings).
+ */
+function documentSearchText(content: string, fm: Record<string, string>): string {
+	const body = content
+		.replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "")
+		.replace(/!\[\[[^\]]*\]\]/g, " ") // ![[embeds]]
+		.replace(/!\[[^\]]*\]\([^)]*\)/g, " ") // ![images](...)
+		.replace(/\[\[[^\]|]*\|([^\]]*)\]\]/g, "$1") // [[target|shown text]] -> shown text
+		.replace(/\[\[([^\]]*)\]\]/g, "$1") // [[target]] -> target
+		.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1") // [text](url) -> text
+		.replace(/<[^>]+>/g, " "); // <font color="...">, etc.
+	const values = Object.entries(fm)
+		.filter(([key]) => key !== "entry_type")
+		.map(([, value]) => value);
+	return [...values, body].join(" ");
+}
+
 interface NoteEntry {
 	file: TFile;
 	content: string;
@@ -86,9 +111,18 @@ interface NoteEntry {
 /** One tab's two halves: header (fixed region) and body (scrolling region). */
 interface TabPane { head: HTMLElement; body: HTMLElement; }
 
-type CardFn = (fm: Record<string, string>) => { title: string; meta: string; badge: string };
+type CardFn = (fm: Record<string, string>) => { title: string; meta: string; badge: string; search?: string };
 
 type WBTab = "characters" | "locations" | "employers" | "lore" | "timeline";
+
+/** Search bar wording per tab. Characters match on four properties; every other tab matches the note's name and text. */
+const SEARCH_HINTS: Record<WBTab, { noun: string; tip: string }> = {
+	characters: { noun: "characters", tip: "Matches name, employer, ship and home" },
+	locations: { noun: "locations", tip: "Matches the name and the text of the note" },
+	employers: { noun: "employers", tip: "Matches the name and the text of the note" },
+	lore: { noun: "lore", tip: "Matches the title and the text of the note" },
+	timeline: { noun: "timeline", tip: "Matches the title and the text of the note" },
+};
 
 // ─── Sidebar View ─────────────────────────────────────────────────────────────
 
@@ -97,6 +131,11 @@ const VIEW_TYPE = "world-builder-sidebar";
 class WorldBuilderView extends ItemView {
 	plugin: WorldBuilderPlugin;
 	activeTab: WBTab = "characters";
+	/** What is typed in the search bar for each tab; kept here so it survives a redraw (Reload, new note, ...). */
+	searchQueries: Record<WBTab, string> = { characters: "", locations: "", employers: "", lore: "", timeline: "" };
+	private searchTargets: Partial<Record<WBTab, HTMLElement>> = {};
+	/** Normalised text each card is matched against. */
+	private searchIndex = new WeakMap<HTMLElement, string>();
 
 	constructor(leaf: WorkspaceLeaf, plugin: WorldBuilderPlugin) {
 		super(leaf);
@@ -114,10 +153,12 @@ class WorldBuilderView extends ItemView {
 		const { containerEl } = this;
 		// Only the list area scrolls, so remember its position across the redraw.
 		const scrollTop = containerEl.querySelector<HTMLElement>(".wb-scroll")?.scrollTop ?? 0;
+		const oldSearch = containerEl.querySelector<HTMLInputElement>(".wb-search-input");
+		const searchHadFocus = !!oldSearch && containerEl.ownerDocument.activeElement === oldSearch;
 		containerEl.empty();
 		containerEl.addClass("wb-sidebar");
 
-		// Fixed region: title, tabs and the active tab's section header (Reload / + New).
+		// Fixed region: title, tabs, the active tab's section header (Reload / + New) and the search bar.
 		// It never scrolls; the lists below it live in their own scrolling region.
 		const fixed = containerEl.createDiv("wb-fixed");
 		const scroll = containerEl.createDiv("wb-scroll");
@@ -145,6 +186,8 @@ class WorldBuilderView extends ItemView {
 				Object.values(contents).forEach((c) => { c?.head.removeClass("active"); c?.body.removeClass("active"); });
 				contents[id]?.head.addClass("active");
 				contents[id]?.body.addClass("active");
+				showTabSearch();
+				updateShadow();
 			};
 			// Each tab has a header half (fixed region) and a body half (scrolling region).
 			const pane: TabPane = {
@@ -153,7 +196,55 @@ class WorldBuilderView extends ItemView {
 			};
 			if (id === this.activeTab) { pane.head.addClass("active"); pane.body.addClass("active"); }
 			contents[id] = pane;
+			this.searchTargets[id] = pane.body;
 		});
+
+		// Search bar: last part of the fixed region, under the section header. Each tab keeps its own text.
+		const searchBox = fixed.createDiv("wb-search");
+		setIcon(searchBox.createEl("span", { cls: "wb-search-icon" }), "search");
+		const searchInput = searchBox.createEl("input", {
+			cls: "wb-search-input",
+			attr: { type: "text", spellcheck: "false" },
+		});
+		const clearBtn = searchBox.createEl("button", {
+			cls: "wb-search-clear",
+			attr: { type: "button", "aria-label": "Clear search" },
+		});
+		setIcon(clearBtn, "x");
+		const syncClear = () => clearBtn.classList.toggle("is-visible", searchInput.value.length > 0);
+		const showTabSearch = () => {
+			const hint = SEARCH_HINTS[this.activeTab];
+			searchInput.value = this.searchQueries[this.activeTab];
+			searchInput.setAttribute("placeholder", `Search ${hint.noun}\u2026`);
+			searchInput.setAttribute("title", hint.tip);
+			searchInput.setAttribute("aria-label", `Search ${hint.noun}`);
+			syncClear();
+		};
+		// Shadow under the fixed region while the list is scrolled, so it reads as sitting on top of it.
+		const updateShadow = () => fixed.classList.toggle("is-scrolled", scroll.scrollTop > 0);
+		scroll.addEventListener("scroll", updateShadow, { passive: true });
+		const setQuery = (q: string) => {
+			this.searchQueries[this.activeTab] = q;
+			syncClear();
+			this.applySearch(this.activeTab);
+			scroll.scrollTop = 0; // the result set changed: start from the top of it
+			updateShadow();
+		};
+		searchInput.addEventListener("input", () => setQuery(searchInput.value));
+		searchInput.addEventListener("keydown", (e) => {
+			if (e.key === "Escape" && searchInput.value) {
+				e.preventDefault();
+				e.stopPropagation();
+				searchInput.value = "";
+				setQuery("");
+			}
+		});
+		clearBtn.addEventListener("click", () => {
+			searchInput.value = "";
+			setQuery("");
+			searchInput.focus();
+		});
+		showTabSearch();
 
 		const folder = this.plugin.settings.worldFolder;
 
@@ -170,6 +261,8 @@ class WorldBuilderView extends ItemView {
 					labeledLine([["Employer", fm.employer], ["Ship", fm.ship]]),
 				].filter(Boolean).join("\n"),
 				badge: fm.role ?? "",
+				// What the search bar matches against.
+				search: [fm.name, fm.employer, fm.ship, fm.home].filter(Boolean).join(" "),
 			}),
 			{ thumbs: true, employerGroups: true, stackBadge: true }
 		);
@@ -224,6 +317,63 @@ class WorldBuilderView extends ItemView {
 
 		// Redrawing empties the container, which resets its scroll position; restore it.
 		scroll.scrollTop = scrollTop;
+
+		// Re-apply each tab's search to the freshly drawn lists, and give the box its focus back.
+		for (const { id } of tabs) this.applySearch(id);
+		updateShadow();
+		if (searchHadFocus) {
+			searchInput.focus();
+			const end = searchInput.value.length;
+			searchInput.setSelectionRange(end, end);
+		}
+	}
+
+	/**
+	 * Hides the cards on one tab that don't match its search text (and, on Characters, any employer
+	 * section left empty). Every word typed must appear in the card's searchable text, in any order,
+	 * ignoring case and accents. Works on the existing cards, so nothing is re-read or re-rendered.
+	 * Characters are matched on name, employer, ship and home; other tabs on the name and the note's text.
+	 */
+	private applySearch(tab: WBTab) {
+		const body = this.searchTargets[tab];
+		if (!body) return;
+		const query = this.searchQueries[tab];
+		const terms = normalizeForSearch(query).split(/\s+/).filter(Boolean);
+		const searching = terms.length > 0;
+		body.classList.toggle("is-searching", searching);
+
+		const filterList = (list: Element): number => {
+			let shown = 0;
+			list.querySelectorAll<HTMLElement>(".wb-card").forEach((card) => {
+				const haystack = this.searchIndex.get(card) ?? "";
+				const match = terms.every((t) => haystack.includes(t));
+				card.classList.toggle("wb-filtered-out", !match);
+				if (match) shown++;
+			});
+			return shown;
+		};
+
+		let matches = 0;
+		body.querySelectorAll<HTMLElement>(".wb-group-header").forEach((header) => {
+			const list = header.nextElementSibling;
+			if (!list || !list.classList.contains("wb-list")) return;
+			const shown = filterList(list);
+			const hideGroup = searching && shown === 0;
+			header.classList.toggle("wb-filtered-out", hideGroup);
+			list.classList.toggle("wb-filtered-out", hideGroup);
+			matches += shown;
+		});
+		// Tabs without employer sections: plain lists
+		body.querySelectorAll<HTMLElement>(":scope > .wb-list").forEach((list) => {
+			if (list.previousElementSibling?.classList.contains("wb-group-header")) return;
+			matches += filterList(list);
+		});
+
+		const none = body.querySelector<HTMLElement>(".wb-no-results");
+		if (none) {
+			none.textContent = `No ${none.getAttribute("data-noun") ?? "entries"} match \u201c${query.trim()}\u201d.`;
+			none.classList.toggle("wb-filtered-out", !(searching && matches === 0));
+		}
 	}
 
 	/** Returns a displayable URL for the first image embedded in a note, or null. */
@@ -298,6 +448,7 @@ class WorldBuilderView extends ItemView {
 		if (!opts.employerGroups) {
 			const list = container.createDiv("wb-list");
 			for (const entry of entries) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge);
+			this.createNoResultsLine(container, label);
 			return;
 		}
 
@@ -335,6 +486,8 @@ class WorldBuilderView extends ItemView {
 			applyCollapsed(this.plugin.settings.collapsedEmployers.includes(key));
 
 			const toggleCollapsed = async () => {
+				// While searching, matching sections are shown open regardless; leave the saved state alone.
+				if (normalizeForSearch(this.searchQueries.characters).trim()) return;
 				const settings = this.plugin.settings;
 				const collapse = !settings.collapsedEmployers.includes(key);
 				settings.collapsedEmployers = collapse
@@ -365,6 +518,16 @@ class WorldBuilderView extends ItemView {
 			for (const entry of items) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge);
 			this.enableReorder(list, key);
 		}
+
+		this.createNoResultsLine(container, label);
+	}
+
+	/** The "No ... match" line; hidden until applySearch() finds nothing. */
+	private createNoResultsLine(container: HTMLElement, label: string) {
+		container.createDiv({
+			cls: "wb-empty wb-no-results wb-filtered-out",
+			attr: { "data-noun": label.toLowerCase() },
+		});
 	}
 
 	private renderCard(
@@ -375,11 +538,13 @@ class WorldBuilderView extends ItemView {
 		stackBadge: boolean
 	): HTMLElement {
 		const { file, content, fm } = entry;
-		const { title, meta, badge } = getCard(fm);
+		const { title, meta, badge, search } = getCard(fm);
 
 		const card = parent.createDiv("wb-card");
 		if (stackBadge) card.addClass("wb-card-stacked");
 		card.setAttribute("data-path", file.path);
+		// Characters supply their own (four properties); everything else searches name + note text.
+		this.searchIndex.set(card, normalizeForSearch(search ?? `${title} ${documentSearchText(content, fm)}`));
 		let body: HTMLElement = card;
 		if (thumbs) {
 			card.addClass("wb-card-with-thumb");
