@@ -70,6 +70,14 @@ function readFrontmatter(content: string): Record<string, string> {
 	return result;
 }
 
+/** "Label: value • Label: value" for the non-empty values. A non-breaking space keeps each label with its value when the line wraps. */
+function labeledLine(pairs: ReadonlyArray<readonly [string, string | undefined]>): string {
+	return pairs
+		.filter(([, value]) => value)
+		.map(([label, value]) => `${label}:\u00a0${value}`)
+		.join(" • ");
+}
+
 interface NoteEntry {
 	file: TFile;
 	content: string;
@@ -101,6 +109,7 @@ class WorldBuilderView extends ItemView {
 
 	async render() {
 		const { containerEl } = this;
+		const scrollTop = containerEl.scrollTop;
 		containerEl.empty();
 		containerEl.addClass("wb-sidebar");
 
@@ -141,7 +150,11 @@ class WorldBuilderView extends ItemView {
 			() => new CharacterModal(this.app, this.plugin, () => this.render()).open(),
 			(fm) => ({
 				title: fm.name ?? "Unnamed",
-				meta: [fm.employer, fm.ship].filter(Boolean).join(" · "),
+				// Two lines: age/home, then employer/ship (a line with no values is dropped).
+				meta: [
+					labeledLine([["Age", fm.age], ["Home", fm.home]]),
+					labeledLine([["Employer", fm.employer], ["Ship", fm.ship]]),
+				].filter(Boolean).join("\n"),
 				badge: fm.role ?? "",
 			}),
 			{ thumbs: true, employerGroups: true, stackBadge: true }
@@ -194,6 +207,9 @@ class WorldBuilderView extends ItemView {
 				badge: "",
 			})
 		);
+
+		// Redrawing empties the container, which resets its scroll position; restore it.
+		containerEl.scrollTop = scrollTop;
 	}
 
 	/** Returns a displayable URL for the first image embedded in a note, or null. */
@@ -347,6 +363,7 @@ class WorldBuilderView extends ItemView {
 		const { title, meta, badge } = getCard(fm);
 
 		const card = parent.createDiv("wb-card");
+		if (stackBadge) card.addClass("wb-card-stacked");
 		card.setAttribute("data-path", file.path);
 		let body: HTMLElement = card;
 		if (thumbs) {
@@ -367,7 +384,7 @@ class WorldBuilderView extends ItemView {
 			const b = badgeHost.createSpan({ cls: `wb-badge wb-badge-${badge.toLowerCase()}` });
 			b.setText(badge);
 		}
-		if (meta) body.createDiv({ cls: "wb-card-meta", text: meta });
+		if (meta) for (const line of meta.split("\n")) body.createDiv({ cls: "wb-card-meta", text: line });
 		card.onclick = () => this.app.workspace.getLeaf().openFile(file);
 		return card;
 	}
@@ -451,7 +468,7 @@ class CharacterModal extends Modal {
 	plugin: WorldBuilderPlugin;
 	onDone: () => void;
 	data = {
-		name: "", role: "protagonist", age: "", employer: "", ship: "",
+		name: "", role: "protagonist", age: "", employer: "", ship: "", home: "",
 		physicalDesc: "", personality: "", goals: "", secrets: ""
 	};
 
@@ -483,6 +500,9 @@ class CharacterModal extends Modal {
 		});
 		new Setting(contentEl).setName("Ship").addText((t) => {
 			t.setPlaceholder("Ship name").onChange((v) => (this.data.ship = v));
+		});
+		new Setting(contentEl).setName("Home").addText((t) => {
+			t.setPlaceholder("Home name").onChange((v) => (this.data.home = v));
 		});
 		new Setting(contentEl).setName("Physical Description").addTextArea((t) => {
 			t.inputEl.addClass("wb-textarea");
@@ -516,6 +536,7 @@ class CharacterModal extends Modal {
 			`age: "${this.data.age}"`,
 			`employer: "${this.data.employer}"`,
 			`ship: "${this.data.ship}"`,
+			`home: "${this.data.home}"`,
 			`type: character`,
 			"---",
 			"",

@@ -57,6 +57,9 @@ function readFrontmatter(content) {
   }
   return result;
 }
+function labeledLine(pairs) {
+  return pairs.filter(([, value]) => value).map(([label, value]) => `${label}:\xA0${value}`).join(" \u2022 ");
+}
 var VIEW_TYPE = "world-builder-sidebar";
 var WorldBuilderView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
@@ -80,6 +83,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
   }
   async render() {
     const { containerEl } = this;
+    const scrollTop = containerEl.scrollTop;
     containerEl.empty();
     containerEl.addClass("wb-sidebar");
     const header = containerEl.createDiv("wb-header");
@@ -118,7 +122,11 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         var _a, _b;
         return {
           title: (_a = fm.name) != null ? _a : "Unnamed",
-          meta: [fm.employer, fm.ship].filter(Boolean).join(" \xB7 "),
+          // Two lines: age/home, then employer/ship (a line with no values is dropped).
+          meta: [
+            labeledLine([["Age", fm.age], ["Home", fm.home]]),
+            labeledLine([["Employer", fm.employer], ["Ship", fm.ship]])
+          ].filter(Boolean).join("\n"),
           badge: (_b = fm.role) != null ? _b : ""
         };
       },
@@ -180,6 +188,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         };
       }
     );
+    containerEl.scrollTop = scrollTop;
   }
   /** Returns a displayable URL for the first image embedded in a note, or null. */
   findFirstImageSrc(content, file) {
@@ -298,6 +307,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     const { file, content, fm } = entry;
     const { title, meta, badge } = getCard(fm);
     const card = parent.createDiv("wb-card");
+    if (stackBadge) card.addClass("wb-card-stacked");
     card.setAttribute("data-path", file.path);
     let body = card;
     if (thumbs) {
@@ -317,7 +327,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       const b = badgeHost.createSpan({ cls: `wb-badge wb-badge-${badge.toLowerCase()}` });
       b.setText(badge);
     }
-    if (meta) body.createDiv({ cls: "wb-card-meta", text: meta });
+    if (meta) for (const line of meta.split("\n")) body.createDiv({ cls: "wb-card-meta", text: line });
     card.onclick = () => this.app.workspace.getLeaf().openFile(file);
     return card;
   }
@@ -397,6 +407,7 @@ var CharacterModal = class extends import_obsidian.Modal {
       age: "",
       employer: "",
       ship: "",
+      home: "",
       physicalDesc: "",
       personality: "",
       goals: "",
@@ -426,6 +437,9 @@ var CharacterModal = class extends import_obsidian.Modal {
     });
     new import_obsidian.Setting(contentEl).setName("Ship").addText((t) => {
       t.setPlaceholder("Ship name").onChange((v) => this.data.ship = v);
+    });
+    new import_obsidian.Setting(contentEl).setName("Home").addText((t) => {
+      t.setPlaceholder("Home name").onChange((v) => this.data.home = v);
     });
     new import_obsidian.Setting(contentEl).setName("Physical Description").addTextArea((t) => {
       t.inputEl.addClass("wb-textarea");
@@ -460,6 +474,7 @@ var CharacterModal = class extends import_obsidian.Modal {
       `age: "${this.data.age}"`,
       `employer: "${this.data.employer}"`,
       `ship: "${this.data.ship}"`,
+      `home: "${this.data.home}"`,
       `type: character`,
       "---",
       "",

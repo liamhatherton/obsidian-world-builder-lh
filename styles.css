@@ -1,6 +1,8 @@
 /* World Builder */
 
 .wb-sidebar { padding: 16px; }
+/* The view's root is the whole leaf, which doesn't scroll on its own. */
+.workspace-leaf-content.wb-sidebar { overflow-x: hidden; overflow-y: auto; }
 
 .wb-header {
 	display: flex;
@@ -71,18 +73,25 @@
 	gap: 10px;
 }
 .wb-thumb {
-	flex: 0 0 48px;
-	width: 48px;
-	height: 48px;
+	--wb-thumb-size: 56px;
+	flex: 0 0 var(--wb-thumb-size);
+	width: var(--wb-thumb-size);
+	height: var(--wb-thumb-size);
+	aspect-ratio: 1 / 1;
 	border-radius: 4px;
-	background: #000;
+	background: #000; /* shown when the note has no image */
 	overflow: hidden;
 }
-.wb-thumb img {
+/* Always fill the square and crop (display only; the image file is untouched). */
+.wb-card .wb-thumb img {
 	display: block;
 	width: 100%;
 	height: 100%;
+	max-width: none;
+	max-height: none;
+	margin: 0;
 	object-fit: cover;
+	object-position: center;
 }
 .wb-card-body { flex: 1; min-width: 0; }
 
@@ -139,6 +148,11 @@
 }
 .wb-card-badge-row { margin-bottom: 3px; }
 .wb-card-badge-row .wb-badge { margin-left: 0; }
+
+/* Character cards: tighter name -> role spacing */
+.wb-card-stacked .wb-card-title { margin-bottom: 0; line-height: 1.25; }
+.wb-card-stacked .wb-card-badge-row { display: flex; align-items: flex-start; margin-top: 0; }
+.wb-card-stacked .wb-badge { line-height: 1.35; }
 
 .wb-badge-protagonist { background: #2d6a4f33; color: #52b788; }
 .wb-badge-antagonist  { background: #6d2d2d33; color: #e07070; }
