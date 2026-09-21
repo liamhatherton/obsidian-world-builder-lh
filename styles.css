@@ -73,12 +73,12 @@
 	gap: 10px;
 }
 .wb-thumb {
-	--wb-thumb-size: 56px;
+	--wb-thumb-size: 64px;
 	flex: 0 0 var(--wb-thumb-size);
 	width: var(--wb-thumb-size);
 	height: var(--wb-thumb-size);
 	aspect-ratio: 1 / 1;
-	border-radius: 4px;
+	border-radius: 1px;
 	background: #000; /* shown when the note has no image */
 	overflow: hidden;
 }
