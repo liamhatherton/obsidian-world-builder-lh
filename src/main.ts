@@ -489,7 +489,7 @@ class LoreModal extends Modal {
 			t.setPlaceholder("Entry title").onChange((v) => (this.data.title = v));
 		});
 		new Setting(contentEl).setName("Category").addDropdown((d) => {
-			["history", "magic", "religion", "culture", "other"].forEach((o) =>
+			["history", "tech", "religion", "culture", "other"].forEach((o) =>
 				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
 			);
 			d.onChange((v) => (this.data.category = v));
