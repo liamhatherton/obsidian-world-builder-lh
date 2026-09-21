@@ -82,13 +82,16 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
   async onClose() {
   }
   async render() {
+    var _a, _b;
     const { containerEl } = this;
-    const scrollTop = containerEl.scrollTop;
+    const scrollTop = (_b = (_a = containerEl.querySelector(".wb-scroll")) == null ? void 0 : _a.scrollTop) != null ? _b : 0;
     containerEl.empty();
     containerEl.addClass("wb-sidebar");
-    const header = containerEl.createDiv("wb-header");
+    const fixed = containerEl.createDiv("wb-fixed");
+    const scroll = containerEl.createDiv("wb-scroll");
+    const header = fixed.createDiv("wb-header");
     header.createEl("h2", { text: "Hatherton World Builder" });
-    const tabBar = containerEl.createDiv("wb-tabs");
+    const tabBar = fixed.createDiv("wb-tabs");
     const tabs = [
       { id: "characters", label: "Characters" },
       { id: "locations", label: "Locations" },
@@ -101,15 +104,25 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       const btn = tabBar.createEl("button", { text: label, cls: "wb-tab" });
       if (id === this.activeTab) btn.addClass("active");
       btn.onclick = () => {
-        var _a;
+        var _a2, _b2;
         this.activeTab = id;
         tabBar.querySelectorAll(".wb-tab").forEach((b) => b.removeClass("active"));
         btn.addClass("active");
-        Object.values(contents).forEach((c) => c == null ? void 0 : c.removeClass("active"));
-        (_a = contents[id]) == null ? void 0 : _a.addClass("active");
+        Object.values(contents).forEach((c) => {
+          c == null ? void 0 : c.head.removeClass("active");
+          c == null ? void 0 : c.body.removeClass("active");
+        });
+        (_a2 = contents[id]) == null ? void 0 : _a2.head.addClass("active");
+        (_b2 = contents[id]) == null ? void 0 : _b2.body.addClass("active");
       };
-      const pane = containerEl.createDiv("wb-tab-content");
-      if (id === this.activeTab) pane.addClass("active");
+      const pane = {
+        head: fixed.createDiv("wb-tab-content wb-tab-head"),
+        body: scroll.createDiv("wb-tab-content wb-tab-body")
+      };
+      if (id === this.activeTab) {
+        pane.head.addClass("active");
+        pane.body.addClass("active");
+      }
       contents[id] = pane;
     });
     const folder = this.plugin.settings.worldFolder;
@@ -119,15 +132,15 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       "Characters",
       () => new CharacterModal(this.app, this.plugin, () => this.render()).open(),
       (fm) => {
-        var _a, _b;
+        var _a2, _b2;
         return {
-          title: (_a = fm.name) != null ? _a : "Unnamed",
+          title: (_a2 = fm.name) != null ? _a2 : "Unnamed",
           // Two lines: age/home, then employer/ship (a line with no values is dropped).
           meta: [
             labeledLine([["Age", fm.age], ["Home", fm.home]]),
             labeledLine([["Employer", fm.employer], ["Ship", fm.ship]])
           ].filter(Boolean).join("\n"),
-          badge: (_b = fm.role) != null ? _b : ""
+          badge: (_b2 = fm.role) != null ? _b2 : ""
         };
       },
       { thumbs: true, employerGroups: true, stackBadge: true }
@@ -138,10 +151,10 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       "Locations",
       () => new LocationModal(this.app, this.plugin, () => this.render()).open(),
       (fm) => {
-        var _a, _b, _c;
+        var _a2, _b2, _c;
         return {
-          title: (_a = fm.name) != null ? _a : "Unnamed",
-          meta: `${(_b = fm.type) != null ? _b : ""} ${fm.parent ? `\xB7 in ${fm.parent}` : ""}`.trim(),
+          title: (_a2 = fm.name) != null ? _a2 : "Unnamed",
+          meta: `${(_b2 = fm.type) != null ? _b2 : ""} ${fm.parent ? `\xB7 in ${fm.parent}` : ""}`.trim(),
           badge: (_c = fm.type) != null ? _c : ""
         };
       }
@@ -152,10 +165,10 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       "Employers",
       () => new EmployerModal(this.app, this.plugin, () => this.render()).open(),
       (fm) => {
-        var _a, _b, _c;
+        var _a2, _b2, _c;
         return {
-          title: (_a = fm.name) != null ? _a : "Unnamed",
-          meta: (_b = fm.goals) != null ? _b : "",
+          title: (_a2 = fm.name) != null ? _a2 : "Unnamed",
+          meta: (_b2 = fm.goals) != null ? _b2 : "",
           badge: (_c = fm.alignment) != null ? _c : ""
         };
       }
@@ -166,10 +179,10 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       "Lore Entries",
       () => new LoreModal(this.app, this.plugin, () => this.render()).open(),
       (fm) => {
-        var _a, _b, _c;
+        var _a2, _b2, _c;
         return {
-          title: (_a = fm.title) != null ? _a : "Untitled",
-          meta: (_b = fm.category) != null ? _b : "",
+          title: (_a2 = fm.title) != null ? _a2 : "Untitled",
+          meta: (_b2 = fm.category) != null ? _b2 : "",
           badge: (_c = fm.category) != null ? _c : ""
         };
       }
@@ -180,15 +193,15 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       "Timeline Events",
       () => new TimelineModal(this.app, this.plugin, () => this.render()).open(),
       (fm) => {
-        var _a, _b;
+        var _a2, _b2;
         return {
-          title: (_a = fm.title) != null ? _a : "Untitled",
-          meta: (_b = fm.date) != null ? _b : "",
+          title: (_a2 = fm.title) != null ? _a2 : "Untitled",
+          meta: (_b2 = fm.date) != null ? _b2 : "",
           badge: ""
         };
       }
     );
-    containerEl.scrollTop = scrollTop;
+    scroll.scrollTop = scrollTop;
   }
   /** Returns a displayable URL for the first image embedded in a note, or null. */
   findFirstImageSrc(content, file) {
@@ -219,9 +232,10 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     }
     return null;
   }
-  async renderSection(container, folderPath, label, onCreate, getCard, opts = {}) {
+  async renderSection(pane, folderPath, label, onCreate, getCard, opts = {}) {
     var _a, _b, _c;
-    const hdr = container.createDiv("wb-section-header");
+    const container = pane.body;
+    const hdr = pane.head.createDiv("wb-section-header");
     hdr.createEl("span", { text: label });
     const actions = hdr.createDiv("wb-section-actions");
     if ((_a = opts.reload) != null ? _a : true) {

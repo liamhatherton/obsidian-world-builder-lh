@@ -1,8 +1,27 @@
 /* World Builder */
 
-.wb-sidebar { padding: 16px; }
-/* The view's root is the whole leaf, which doesn't scroll on its own. */
-.workspace-leaf-content.wb-sidebar { overflow-x: hidden; overflow-y: auto; }
+/*
+ * Layout: the view's root (the whole leaf) is a non-scrolling column made of
+ *   .wb-fixed  - title, tabs and the active tab's section header (Reload / + New); always visible
+ *   .wb-scroll - the lists; the only part that scrolls
+ */
+.workspace-leaf-content.wb-sidebar {
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	padding: 0;
+}
+.wb-sidebar .wb-fixed {
+	flex: 0 0 auto;
+	padding: 16px 16px 0;
+}
+.wb-sidebar .wb-scroll {
+	flex: 1 1 auto;
+	min-height: 0; /* lets the flex child shrink so it can scroll */
+	overflow-x: hidden;
+	overflow-y: auto;
+	padding: 0 16px 16px;
+}
 
 .wb-header {
 	display: flex;
@@ -45,7 +64,8 @@
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	margin-bottom: 10px;
+	padding-bottom: 10px;
+	border-bottom: 1px solid var(--background-modifier-border);
 }
 .wb-section-header > span {
 	font-size: 0.8em;
@@ -108,7 +128,8 @@
 	font-weight: 600;
 	color: var(--text-normal);
 }
-.wb-section-header + .wb-group-header { margin-top: 4px; }
+/* The first thing in the scrolling region sits a little below the fixed header. */
+.wb-scroll .wb-tab-body > :first-child { margin-top: 10px; }
 .wb-group-header:hover .wb-group-title { color: var(--text-accent); }
 .wb-group-chevron {
 	display: inline-flex;

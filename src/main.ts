@@ -83,6 +83,9 @@ interface NoteEntry {
 	content: string;
 	fm: Record<string, string>;
 }
+/** One tab's two halves: header (fixed region) and body (scrolling region). */
+interface TabPane { head: HTMLElement; body: HTMLElement; }
+
 type CardFn = (fm: Record<string, string>) => { title: string; meta: string; badge: string };
 
 type WBTab = "characters" | "locations" | "employers" | "lore" | "timeline";
@@ -109,14 +112,20 @@ class WorldBuilderView extends ItemView {
 
 	async render() {
 		const { containerEl } = this;
-		const scrollTop = containerEl.scrollTop;
+		// Only the list area scrolls, so remember its position across the redraw.
+		const scrollTop = containerEl.querySelector<HTMLElement>(".wb-scroll")?.scrollTop ?? 0;
 		containerEl.empty();
 		containerEl.addClass("wb-sidebar");
 
-		const header = containerEl.createDiv("wb-header");
+		// Fixed region: title, tabs and the active tab's section header (Reload / + New).
+		// It never scrolls; the lists below it live in their own scrolling region.
+		const fixed = containerEl.createDiv("wb-fixed");
+		const scroll = containerEl.createDiv("wb-scroll");
+
+		const header = fixed.createDiv("wb-header");
 		header.createEl("h2", { text: "Hatherton World Builder" });
 
-		const tabBar = containerEl.createDiv("wb-tabs");
+		const tabBar = fixed.createDiv("wb-tabs");
 		const tabs: { id: WBTab; label: string }[] = [
 			{ id: "characters", label: "Characters" },
 			{ id: "locations", label: "Locations" },
@@ -125,7 +134,7 @@ class WorldBuilderView extends ItemView {
 			{ id: "timeline", label: "Timeline" },
 		];
 
-		const contents: Partial<Record<WBTab, HTMLElement>> = {};
+		const contents: Partial<Record<WBTab, TabPane>> = {};
 		tabs.forEach(({ id, label }) => {
 			const btn = tabBar.createEl("button", { text: label, cls: "wb-tab" });
 			if (id === this.activeTab) btn.addClass("active");
@@ -133,11 +142,16 @@ class WorldBuilderView extends ItemView {
 				this.activeTab = id;
 				tabBar.querySelectorAll(".wb-tab").forEach((b) => b.removeClass("active"));
 				btn.addClass("active");
-				Object.values(contents).forEach((c) => c?.removeClass("active"));
-				contents[id]?.addClass("active");
+				Object.values(contents).forEach((c) => { c?.head.removeClass("active"); c?.body.removeClass("active"); });
+				contents[id]?.head.addClass("active");
+				contents[id]?.body.addClass("active");
 			};
-			const pane = containerEl.createDiv("wb-tab-content");
-			if (id === this.activeTab) pane.addClass("active");
+			// Each tab has a header half (fixed region) and a body half (scrolling region).
+			const pane: TabPane = {
+				head: fixed.createDiv("wb-tab-content wb-tab-head"),
+				body: scroll.createDiv("wb-tab-content wb-tab-body"),
+			};
+			if (id === this.activeTab) { pane.head.addClass("active"); pane.body.addClass("active"); }
 			contents[id] = pane;
 		});
 
@@ -209,7 +223,7 @@ class WorldBuilderView extends ItemView {
 		);
 
 		// Redrawing empties the container, which resets its scroll position; restore it.
-		containerEl.scrollTop = scrollTop;
+		scroll.scrollTop = scrollTop;
 	}
 
 	/** Returns a displayable URL for the first image embedded in a note, or null. */
@@ -243,14 +257,15 @@ class WorldBuilderView extends ItemView {
 	}
 
 	async renderSection(
-		container: HTMLElement,
+		pane: TabPane,
 		folderPath: string,
 		label: string,
 		onCreate: () => void,
 		getCard: (fm: Record<string, string>) => { title: string; meta: string; badge: string },
 		opts: { thumbs?: boolean; reload?: boolean; employerGroups?: boolean; stackBadge?: boolean } = {}
 	) {
-		const hdr = container.createDiv("wb-section-header");
+		const container = pane.body;
+		const hdr = pane.head.createDiv("wb-section-header");
 		hdr.createEl("span", { text: label });
 		const actions = hdr.createDiv("wb-section-actions");
 		if (opts.reload ?? true) {
