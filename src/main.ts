@@ -121,7 +121,7 @@ class WorldBuilderView extends ItemView {
 			() => new CharacterModal(this.app, this.plugin, () => this.render()).open(),
 			(fm) => ({
 				title: fm.name ?? "Unnamed",
-				meta: `${fm.role ?? ""} ${fm.employer ? `· ${fm.employer}` : ""}`.trim(),
+				meta: `${fm.role ?? ""} ${fm.employer ? `· ${fm.employer}` : ""} ${fm.ship ? `· ${fm.ship}` : ""}`.trim(),
 				badge: fm.role ?? "",
 			})
 		);
@@ -221,7 +221,7 @@ class CharacterModal extends Modal {
 	plugin: WorldBuilderPlugin;
 	onDone: () => void;
 	data = {
-		name: "", role: "protagonist", age: "", employer: "",
+		name: "", role: "protagonist", age: "", employer: "", ship: "",
 		physicalDesc: "", personality: "", goals: "", secrets: ""
 	};
 
@@ -250,6 +250,9 @@ class CharacterModal extends Modal {
 		});
 		new Setting(contentEl).setName("Employer").addText((t) => {
 			t.setPlaceholder("Employer name").onChange((v) => (this.data.employer = v));
+		});
+		new Setting(contentEl).setName("Ship").addText((t) => {
+			t.setPlaceholder("Ship name").onChange((v) => (this.data.ship = v));
 		});
 		new Setting(contentEl).setName("Physical Description").addTextArea((t) => {
 			t.inputEl.addClass("wb-textarea");
@@ -282,6 +285,7 @@ class CharacterModal extends Modal {
 			`role: ${this.data.role}`,
 			`age: "${this.data.age}"`,
 			`employer: "${this.data.employer}"`,
+			`ship: "${this.data.ship}"`,
 			`type: character`,
 			"---",
 			"",

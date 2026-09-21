@@ -114,7 +114,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         var _a, _b, _c;
         return {
           title: (_a = fm.name) != null ? _a : "Unnamed",
-          meta: `${(_b = fm.role) != null ? _b : ""} ${fm.employer ? `\xB7 ${fm.employer}` : ""}`.trim(),
+          meta: `${(_b = fm.role) != null ? _b : ""} ${fm.employer ? `\xB7 ${fm.employer}` : ""} ${fm.ship ? `\xB7 ${fm.ship}` : ""}`.trim(),
           badge: (_c = fm.role) != null ? _c : ""
         };
       }
@@ -213,6 +213,7 @@ var CharacterModal = class extends import_obsidian.Modal {
       role: "protagonist",
       age: "",
       employer: "",
+      ship: "",
       physicalDesc: "",
       personality: "",
       goals: "",
@@ -239,6 +240,9 @@ var CharacterModal = class extends import_obsidian.Modal {
     });
     new import_obsidian.Setting(contentEl).setName("Employer").addText((t) => {
       t.setPlaceholder("Employer name").onChange((v) => this.data.employer = v);
+    });
+    new import_obsidian.Setting(contentEl).setName("Ship").addText((t) => {
+      t.setPlaceholder("Ship name").onChange((v) => this.data.ship = v);
     });
     new import_obsidian.Setting(contentEl).setName("Physical Description").addTextArea((t) => {
       t.inputEl.addClass("wb-textarea");
@@ -272,6 +276,7 @@ var CharacterModal = class extends import_obsidian.Modal {
       `role: ${this.data.role}`,
       `age: "${this.data.age}"`,
       `employer: "${this.data.employer}"`,
+      `ship: "${this.data.ship}"`,
       `type: character`,
       "---",
       "",
