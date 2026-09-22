@@ -23,9 +23,32 @@ __export(main_exports, {
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
-var DEFAULT_SETTINGS = { worldFolder: "World", characterOrder: {}, collapsedEmployers: [] };
+var DEFAULT_SETTINGS = {
+  worldFolder: "World",
+  characterOrder: {},
+  collapsedEmployers: [],
+  sectionOrder: {}
+};
 function slugify(s) {
   return s.replace(/[/\\:*?"<>|#^[\]]/g, "-").trim();
+}
+var IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
+function stripFrontmatterBlock(content) {
+  return content.replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "");
+}
+function stripLeadingHeading(markdown) {
+  var _a;
+  const lines = markdown.replace(/^\s+/, "").split("\n");
+  if (!/^#\s+\S/.test((_a = lines[0]) != null ? _a : "")) return markdown;
+  lines.shift();
+  while (lines[0] === "") lines.shift();
+  return lines.join("\n");
+}
+function stripGraphics(markdown) {
+  return markdown.replace(/!\[\[([^\]]+)\]\]/g, (match, inner) => {
+    const target = inner.split("|")[0].split("#")[0].trim();
+    return IMG_EXT.test(target) ? "" : match;
+  }).replace(/!\[[^\]]*\]\((?:<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\)/g, "").replace(/<img\b[^>]*\/?>/gi, "");
 }
 async function ensureFolder(app, path) {
   if (!app.vault.getAbstractFileByPath(path)) {
@@ -60,11 +83,48 @@ function readFrontmatter(content) {
 function labeledLine(pairs) {
   return pairs.filter(([, value]) => value).map(([label, value]) => `${label}:\xA0${value}`).join(" \u2022 ");
 }
+function normalizeForSearch(s) {
+  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+function documentSearchText(content, fm) {
+  const body = stripFrontmatterBlock(content).replace(/!\[\[[^\]]*\]\]/g, " ").replace(/!\[[^\]]*\]\([^)]*\)/g, " ").replace(/\[\[[^\]|]*\|([^\]]*)\]\]/g, "$1").replace(/\[\[([^\]]*)\]\]/g, "$1").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/<[^>]+>/g, " ");
+  const values = Object.entries(fm).filter(([key]) => key !== "entry_type").map(([, value]) => value);
+  return [...values, body].join(" ");
+}
+var SEARCH_HINTS = {
+  characters: { noun: "characters", tip: "Matches name, employer, ship and home" },
+  locations: { noun: "locations", tip: "Matches the name and the text of the note" },
+  employers: { noun: "employers", tip: "Matches the name and the text of the note" },
+  lore: { noun: "lore", tip: "Matches the title and the text of the note" },
+  timeline: { noun: "timeline", tip: "Matches the title and the text of the note" }
+};
 var VIEW_TYPE = "world-builder-sidebar";
 var WorldBuilderView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.activeTab = "characters";
+    /** What is typed in the search bar for each tab; kept here so it survives a redraw (Reload, new note, ...). */
+    this.searchQueries = { characters: "", locations: "", employers: "", lore: "", timeline: "" };
+    this.searchTargets = {};
+    /** Normalised text each card is matched against. */
+    this.searchIndex = /* @__PURE__ */ new WeakMap();
+    /** Every note currently drawn in the sidebar, keyed by path, so a wiki-link click can find its entry. */
+    this.entryByPath = /* @__PURE__ */ new Map();
+    // Rebuilt on every render(); let switchTab() and the nav buttons operate without closures.
+    this.tabBarEl = null;
+    this.tabContents = {};
+    this.showTabSearchFn = null;
+    this.updateShadowFn = null;
+    /**
+     * Back/forward history across tab switches and card expansions (including ones triggered by
+     * clicking a wiki-link in an expanded card). Persists across render() calls; only the DOM it
+     * points at is rebuilt.
+     */
+    this.navHistory = [];
+    this.navIndex = -1;
+    /** True while a back/forward navigation is replaying a history entry, so it isn't re-recorded. */
+    this.restoringNav = false;
+    this.navButtons = [];
     this.plugin = plugin;
   }
   getViewType() {
@@ -82,13 +142,20 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
   async onClose() {
   }
   async render() {
+    var _a, _b;
     const { containerEl } = this;
-    const scrollTop = containerEl.scrollTop;
+    const scrollTop = (_b = (_a = containerEl.querySelector(".wb-scroll")) == null ? void 0 : _a.scrollTop) != null ? _b : 0;
+    const oldSearch = containerEl.querySelector(".wb-search-input");
+    const searchHadFocus = !!oldSearch && containerEl.ownerDocument.activeElement === oldSearch;
     containerEl.empty();
     containerEl.addClass("wb-sidebar");
-    const header = containerEl.createDiv("wb-header");
-    header.createEl("h2", { text: "Hatherton World Builder" });
-    const tabBar = containerEl.createDiv("wb-tabs");
+    this.entryByPath = /* @__PURE__ */ new Map();
+    this.navButtons = [];
+    const fixed = containerEl.createDiv("wb-fixed");
+    const scroll = containerEl.createDiv("wb-scroll");
+    const header = fixed.createDiv("wb-header");
+    header.createEl("h2", { text: "Hatherton's World Builder" });
+    const tabBar = fixed.createDiv("wb-tabs");
     const tabs = [
       { id: "characters", label: "Characters" },
       { id: "locations", label: "Locations" },
@@ -96,104 +163,225 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       { id: "lore", label: "Lore" },
       { id: "timeline", label: "Timeline" }
     ];
+    this.tabBarEl = tabBar;
     const contents = {};
     tabs.forEach(({ id, label }) => {
       const btn = tabBar.createEl("button", { text: label, cls: "wb-tab" });
+      btn.setAttribute("data-tab", id);
       if (id === this.activeTab) btn.addClass("active");
       btn.onclick = () => {
-        var _a;
-        this.activeTab = id;
-        tabBar.querySelectorAll(".wb-tab").forEach((b) => b.removeClass("active"));
-        btn.addClass("active");
-        Object.values(contents).forEach((c) => c == null ? void 0 : c.removeClass("active"));
-        (_a = contents[id]) == null ? void 0 : _a.addClass("active");
+        if (id === this.activeTab) return;
+        this.switchTab(id);
+        this.recordNav(id, null);
       };
-      const pane = containerEl.createDiv("wb-tab-content");
-      if (id === this.activeTab) pane.addClass("active");
+      const pane = {
+        head: fixed.createDiv("wb-tab-content wb-tab-head"),
+        body: scroll.createDiv("wb-tab-content wb-tab-body")
+      };
+      if (id === this.activeTab) {
+        pane.head.addClass("active");
+        pane.body.addClass("active");
+      }
       contents[id] = pane;
+      this.searchTargets[id] = pane.body;
     });
+    this.tabContents = contents;
+    const searchBox = fixed.createDiv("wb-search");
+    (0, import_obsidian.setIcon)(searchBox.createEl("span", { cls: "wb-search-icon" }), "search");
+    const searchInput = searchBox.createEl("input", {
+      cls: "wb-search-input",
+      attr: { type: "text", spellcheck: "false" }
+    });
+    const clearBtn = searchBox.createEl("button", {
+      cls: "wb-search-clear",
+      attr: { type: "button", "aria-label": "Clear search" }
+    });
+    (0, import_obsidian.setIcon)(clearBtn, "x");
+    const syncClear = () => clearBtn.classList.toggle("is-visible", searchInput.value.length > 0);
+    const showTabSearch = () => {
+      const hint = SEARCH_HINTS[this.activeTab];
+      searchInput.value = this.searchQueries[this.activeTab];
+      searchInput.setAttribute("placeholder", `Search ${hint.noun}\u2026`);
+      searchInput.setAttribute("title", hint.tip);
+      searchInput.setAttribute("aria-label", `Search ${hint.noun}`);
+      syncClear();
+    };
+    const updateShadow = () => fixed.classList.toggle("is-scrolled", scroll.scrollTop > 0);
+    scroll.addEventListener("scroll", updateShadow, { passive: true });
+    this.showTabSearchFn = showTabSearch;
+    this.updateShadowFn = updateShadow;
+    const setQuery = (q) => {
+      this.searchQueries[this.activeTab] = q;
+      syncClear();
+      this.applySearch(this.activeTab);
+      scroll.scrollTop = 0;
+      updateShadow();
+    };
+    searchInput.addEventListener("input", () => setQuery(searchInput.value));
+    searchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && searchInput.value) {
+        e.preventDefault();
+        e.stopPropagation();
+        searchInput.value = "";
+        setQuery("");
+      }
+    });
+    clearBtn.addEventListener("click", () => {
+      searchInput.value = "";
+      setQuery("");
+      searchInput.focus();
+    });
+    showTabSearch();
     const folder = this.plugin.settings.worldFolder;
     await this.renderSection(
+      "characters",
       contents.characters,
       `${folder}/Characters`,
       "Characters",
       () => new CharacterModal(this.app, this.plugin, () => this.render()).open(),
       (fm) => {
-        var _a, _b;
+        var _a2, _b2;
         return {
-          title: (_a = fm.name) != null ? _a : "Unnamed",
+          title: (_a2 = fm.name) != null ? _a2 : "Unnamed",
           // Two lines: age/home, then employer/ship (a line with no values is dropped).
           meta: [
             labeledLine([["Age", fm.age], ["Home", fm.home]]),
             labeledLine([["Employer", fm.employer], ["Ship", fm.ship]])
           ].filter(Boolean).join("\n"),
-          badge: (_b = fm.role) != null ? _b : ""
+          badge: (_b2 = fm.role) != null ? _b2 : "",
+          // What the search bar matches against.
+          search: [fm.name, fm.employer, fm.ship, fm.home].filter(Boolean).join(" ")
         };
       },
-      { thumbs: true, employerGroups: true, stackBadge: true }
+      { thumbs: true, employerGroups: true, stackBadge: true, expandable: true }
     );
     await this.renderSection(
+      "locations",
       contents.locations,
       `${folder}/Locations`,
       "Locations",
       () => new LocationModal(this.app, this.plugin, () => this.render()).open(),
       (fm) => {
-        var _a, _b, _c;
+        var _a2, _b2, _c;
         return {
-          title: (_a = fm.name) != null ? _a : "Unnamed",
-          meta: `${(_b = fm.type) != null ? _b : ""} ${fm.parent ? `\xB7 in ${fm.parent}` : ""}`.trim(),
+          title: (_a2 = fm.name) != null ? _a2 : "Unnamed",
+          meta: `${(_b2 = fm.type) != null ? _b2 : ""} ${fm.parent ? `\xB7 in ${fm.parent}` : ""}`.trim(),
           badge: (_c = fm.type) != null ? _c : ""
         };
-      }
+      },
+      { thumbs: true, expandable: true }
     );
     await this.renderSection(
+      "employers",
       contents.employers,
       `${folder}/Employers`,
       "Employers",
       () => new EmployerModal(this.app, this.plugin, () => this.render()).open(),
       (fm) => {
-        var _a, _b, _c;
+        var _a2, _b2, _c;
         return {
-          title: (_a = fm.name) != null ? _a : "Unnamed",
-          meta: (_b = fm.goals) != null ? _b : "",
+          title: (_a2 = fm.name) != null ? _a2 : "Unnamed",
+          meta: (_b2 = fm.goals) != null ? _b2 : "",
           badge: (_c = fm.alignment) != null ? _c : ""
         };
-      }
+      },
+      { thumbs: true, expandable: true }
     );
     await this.renderSection(
+      "lore",
       contents.lore,
       `${folder}/Lore`,
       "Lore Entries",
       () => new LoreModal(this.app, this.plugin, () => this.render()).open(),
       (fm) => {
-        var _a, _b, _c;
+        var _a2, _b2, _c;
         return {
-          title: (_a = fm.title) != null ? _a : "Untitled",
-          meta: (_b = fm.category) != null ? _b : "",
+          title: (_a2 = fm.title) != null ? _a2 : "Untitled",
+          meta: (_b2 = fm.category) != null ? _b2 : "",
           badge: (_c = fm.category) != null ? _c : ""
         };
-      }
+      },
+      { expandable: true }
     );
     await this.renderSection(
+      "timeline",
       contents.timeline,
       `${folder}/Timeline`,
       "Timeline Events",
       () => new TimelineModal(this.app, this.plugin, () => this.render()).open(),
       (fm) => {
-        var _a, _b;
+        var _a2, _b2;
         return {
-          title: (_a = fm.title) != null ? _a : "Untitled",
-          meta: (_b = fm.date) != null ? _b : "",
+          title: (_a2 = fm.title) != null ? _a2 : "Untitled",
+          meta: (_b2 = fm.date) != null ? _b2 : "",
           badge: ""
         };
-      }
+      },
+      { expandable: true }
     );
-    containerEl.scrollTop = scrollTop;
+    scroll.scrollTop = scrollTop;
+    for (const { id } of tabs) this.applySearch(id);
+    updateShadow();
+    if (searchHadFocus) {
+      searchInput.focus();
+      const end = searchInput.value.length;
+      searchInput.setSelectionRange(end, end);
+    }
+    if (this.navHistory.length === 0) {
+      this.navHistory = [{ tab: this.activeTab, cardPath: null }];
+      this.navIndex = 0;
+    }
+    this.updateNavButtonStates();
+  }
+  /**
+   * Hides the cards on one tab that don't match its search text (and, on Characters, any employer
+   * section left empty). Every word typed must appear in the card's searchable text, in any order,
+   * ignoring case and accents. Works on the existing cards, so nothing is re-read or re-rendered.
+   * Characters are matched on name, employer, ship and home; other tabs on the name and the note's text.
+   */
+  applySearch(tab) {
+    var _a;
+    const body = this.searchTargets[tab];
+    if (!body) return;
+    const query = this.searchQueries[tab];
+    const terms = normalizeForSearch(query).split(/\s+/).filter(Boolean);
+    const searching = terms.length > 0;
+    body.classList.toggle("is-searching", searching);
+    const filterList = (list) => {
+      let shown = 0;
+      list.querySelectorAll(".wb-card").forEach((card) => {
+        var _a2;
+        const haystack = (_a2 = this.searchIndex.get(card)) != null ? _a2 : "";
+        const match = terms.every((t) => haystack.includes(t));
+        card.classList.toggle("wb-filtered-out", !match);
+        if (match) shown++;
+      });
+      return shown;
+    };
+    let matches = 0;
+    body.querySelectorAll(".wb-group-header").forEach((header) => {
+      const list = header.nextElementSibling;
+      if (!list || !list.classList.contains("wb-list")) return;
+      const shown = filterList(list);
+      const hideGroup = searching && shown === 0;
+      header.classList.toggle("wb-filtered-out", hideGroup);
+      list.classList.toggle("wb-filtered-out", hideGroup);
+      matches += shown;
+    });
+    body.querySelectorAll(":scope > .wb-list").forEach((list) => {
+      var _a2;
+      if ((_a2 = list.previousElementSibling) == null ? void 0 : _a2.classList.contains("wb-group-header")) return;
+      matches += filterList(list);
+    });
+    const none = body.querySelector(".wb-no-results");
+    if (none) {
+      none.textContent = `No ${(_a = none.getAttribute("data-noun")) != null ? _a : "entries"} match \u201C${query.trim()}\u201D.`;
+      none.classList.toggle("wb-filtered-out", !(searching && matches === 0));
+    }
   }
   /** Returns a displayable URL for the first image embedded in a note, or null. */
   findFirstImageSrc(content, file) {
     var _a, _b;
-    const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
     const re = /!\[\[([^\]]+)\]\]|!\[[^\]]*\]\((<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\)/g;
     let m;
     while ((m = re.exec(content)) !== null) {
@@ -219,10 +407,26 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     }
     return null;
   }
-  async renderSection(container, folderPath, label, onCreate, getCard, opts = {}) {
-    var _a, _b, _c;
-    const hdr = container.createDiv("wb-section-header");
-    hdr.createEl("span", { text: label });
+  async renderSection(tab, pane, folderPath, label, onCreate, getCard, opts = {}) {
+    var _a, _b, _c, _d;
+    const container = pane.body;
+    const hdr = pane.head.createDiv("wb-section-header");
+    const titleGroup = hdr.createDiv("wb-section-title");
+    const navGroup = titleGroup.createDiv("wb-nav-buttons");
+    const backBtn = navGroup.createEl("button", {
+      cls: "wb-nav-btn",
+      text: "<",
+      attr: { type: "button", "aria-label": "Back" }
+    });
+    const fwdBtn = navGroup.createEl("button", {
+      cls: "wb-nav-btn",
+      text: ">",
+      attr: { type: "button", "aria-label": "Forward" }
+    });
+    backBtn.onclick = () => this.navigateBack();
+    fwdBtn.onclick = () => this.navigateForward();
+    this.navButtons.push({ back: backBtn, fwd: fwdBtn });
+    titleGroup.createEl("span", { text: label });
     const actions = hdr.createDiv("wb-section-actions");
     if ((_a = opts.reload) != null ? _a : true) {
       const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary" });
@@ -245,16 +449,24 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     const entries = [];
     for (const file of files) {
       const content = await this.app.vault.cachedRead(file);
-      entries.push({ file, content, fm: readFrontmatter(content) });
+      const entry = { file, content, fm: readFrontmatter(content) };
+      entries.push(entry);
+      this.entryByPath.set(file.path, entry);
     }
     if (!opts.employerGroups) {
       const list = container.createDiv("wb-list");
-      for (const entry of entries) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge);
+      const ordered = this.orderEntries(entries, (_b = this.plugin.settings.sectionOrder[tab]) != null ? _b : []);
+      for (const entry of ordered) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
+      this.enableReorder(list, async (order) => {
+        this.plugin.settings.sectionOrder[tab] = order;
+        await this.plugin.saveSettings();
+      });
+      this.createNoResultsLine(container, label);
       return;
     }
     const groups = /* @__PURE__ */ new Map();
     for (const entry of entries) {
-      const employer = ((_b = entry.fm.employer) != null ? _b : "").trim();
+      const employer = ((_c = entry.fm.employer) != null ? _c : "").trim();
       const key = employer.toLowerCase();
       let group = groups.get(key);
       if (!group) {
@@ -280,6 +492,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       };
       applyCollapsed(this.plugin.settings.collapsedEmployers.includes(key));
       const toggleCollapsed = async () => {
+        if (normalizeForSearch(this.searchQueries.characters).trim()) return;
         const settings = this.plugin.settings;
         const collapse = !settings.collapsedEmployers.includes(key);
         settings.collapsedEmployers = collapse ? [...settings.collapsedEmployers, key] : settings.collapsedEmployers.filter((k) => k !== key);
@@ -293,50 +506,275 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
           toggleCollapsed();
         }
       };
-      const saved = (_c = this.plugin.settings.characterOrder[key]) != null ? _c : [];
-      const rank = (path) => {
-        const i = saved.indexOf(path);
-        return i === -1 ? saved.length : i;
-      };
-      const items = group.items.map((entry, index) => ({ entry, index })).sort((a, b) => rank(a.entry.file.path) - rank(b.entry.file.path) || a.index - b.index).map(({ entry }) => entry);
-      for (const entry of items) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge);
-      this.enableReorder(list, key);
+      const items = this.orderEntries(group.items, (_d = this.plugin.settings.characterOrder[key]) != null ? _d : []);
+      for (const entry of items) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
+      this.enableReorder(list, async (order) => {
+        this.plugin.settings.characterOrder[key] = order;
+        await this.plugin.saveSettings();
+      });
     }
+    this.createNoResultsLine(container, label);
   }
-  renderCard(parent, entry, getCard, thumbs, stackBadge) {
+  /**
+   * Applies a saved manual order (a list of note paths, earliest first) to a set of entries.
+   * Anything not yet present in `saved` keeps its original relative position after the ordered ones.
+   */
+  orderEntries(entries, saved) {
+    const rank = (path) => {
+      const i = saved.indexOf(path);
+      return i === -1 ? saved.length : i;
+    };
+    return entries.map((entry, index) => ({ entry, index })).sort((a, b) => rank(a.entry.file.path) - rank(b.entry.file.path) || a.index - b.index).map(({ entry }) => entry);
+  }
+  /** The "No ... match" line; hidden until applySearch() finds nothing. */
+  createNoResultsLine(container, label) {
+    container.createDiv({
+      cls: "wb-empty wb-no-results wb-filtered-out",
+      attr: { "data-noun": label.toLowerCase() }
+    });
+  }
+  renderCard(tab, parent, entry, getCard, thumbs, stackBadge, expandable) {
     const { file, content, fm } = entry;
-    const { title, meta, badge } = getCard(fm);
+    const { title, meta, badge, search } = getCard(fm);
     const card = parent.createDiv("wb-card");
     if (stackBadge) card.addClass("wb-card-stacked");
     card.setAttribute("data-path", file.path);
+    this.searchIndex.set(card, normalizeForSearch(search != null ? search : `${title} ${documentSearchText(content, fm)}`));
     let body = card;
     if (thumbs) {
       card.addClass("wb-card-with-thumb");
-      const thumb = card.createDiv("wb-thumb");
+      const row = card.createDiv("wb-card-row");
+      const thumb = row.createDiv("wb-thumb");
       const src = this.findFirstImageSrc(content, file);
       if (src) {
         const img = thumb.createEl("img", { attr: { src, alt: "", draggable: "false" } });
         img.onerror = () => img.remove();
       }
-      body = card.createDiv("wb-card-body");
+      body = row.createDiv("wb-card-body");
     }
     const titleEl = body.createDiv("wb-card-title");
-    titleEl.setText(title);
+    titleEl.createSpan({ text: title });
+    if (expandable) titleEl.addClass("wb-card-title-row");
     if (badge) {
       const badgeHost = stackBadge ? body.createDiv("wb-card-badge-row") : titleEl;
       const b = badgeHost.createSpan({ cls: `wb-badge wb-badge-${badge.toLowerCase()}` });
       b.setText(badge);
     }
+    if (expandable) (0, import_obsidian.setIcon)(titleEl.createSpan({ cls: "wb-card-chevron" }), "chevron-right");
     if (meta) for (const line of meta.split("\n")) body.createDiv({ cls: "wb-card-meta", text: line });
-    card.onclick = () => this.app.workspace.getLeaf().openFile(file);
+    if (expandable) {
+      card.setAttribute("role", "button");
+      card.setAttribute("tabindex", "0");
+      card.setAttribute("aria-expanded", "false");
+      card.onclick = () => this.toggleCardExpand(tab, card, entry);
+      card.onkeydown = (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          this.toggleCardExpand(tab, card, entry);
+        }
+      };
+    } else {
+      card.onclick = () => this.app.workspace.getLeaf().openFile(file);
+    }
     return card;
   }
   /**
-   * Makes the cards in one employer's list drag-sortable. Each list only accepts cards
-   * that were picked up from that same list, so characters can't be moved between employers.
-   * The new order is saved to plugin data (notes themselves are never modified).
+   * Expands a card in place to show the note's text (no images) instead of opening it in the
+   * editor, so writing in the main pane isn't interrupted. An Edit button in the expanded area
+   * still opens the note the normal way. Clicking the card again (or its chevron) collapses it.
    */
-  enableReorder(list, groupKey) {
+  toggleCardExpand(tab, card, entry) {
+    var _a;
+    const wasExpanded = card.classList.contains("wb-card-expanded");
+    (_a = card.querySelector(":scope > .wb-card-expand")) == null ? void 0 : _a.remove();
+    card.removeClass("wb-card-expanded");
+    card.setAttribute("aria-expanded", "false");
+    if (wasExpanded) {
+      this.recordNav(tab, null);
+      return;
+    }
+    card.addClass("wb-card-expanded");
+    card.setAttribute("aria-expanded", "true");
+    const expand = card.createDiv("wb-card-expand");
+    expand.setAttribute("draggable", "false");
+    expand.onclick = (e) => e.stopPropagation();
+    const body = expand.createDiv("wb-card-expand-body");
+    body.addClass("markdown-rendered");
+    const bodyText = stripLeadingHeading(stripFrontmatterBlock(entry.content));
+    const textOnly = stripGraphics(bodyText);
+    import_obsidian.MarkdownRenderer.render(this.app, textOnly, body, entry.file.path, this);
+    body.addEventListener("click", (e) => {
+      var _a2;
+      const target = e.target;
+      const link = target.closest("a.internal-link");
+      if (!link) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const href = (_a2 = link.getAttribute("data-href")) != null ? _a2 : link.getAttribute("href");
+      if (href) this.followWikiLink(href, entry.file.path);
+    });
+    const footer = expand.createDiv("wb-card-expand-footer");
+    const editBtn = footer.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
+    (0, import_obsidian.setIcon)(editBtn.createEl("span", { cls: "wb-btn-icon" }), "pencil");
+    editBtn.createEl("span", { text: "Edit" });
+    editBtn.onclick = () => this.app.workspace.getLeaf().openFile(entry.file);
+    this.recordNav(tab, entry.file.path);
+  }
+  /** The section folder a tab's notes live in, e.g. "World/Characters". */
+  tabFolder(tab) {
+    const folder = this.plugin.settings.worldFolder;
+    const names = {
+      characters: "Characters",
+      locations: "Locations",
+      employers: "Employers",
+      lore: "Lore",
+      timeline: "Timeline"
+    };
+    return `${folder}/${names[tab]}`;
+  }
+  /** Which tab (if any) a given file's own card lives on. */
+  findEntryTab(file) {
+    const tabs = ["characters", "locations", "employers", "lore", "timeline"];
+    for (const tab of tabs) {
+      if (file.path.startsWith(this.tabFolder(tab) + "/")) return tab;
+    }
+    return null;
+  }
+  /**
+   * Switches the active tab's DOM (fixed header half + scrolling body half) without touching
+   * navigation history — callers that count as a "navigation" record it themselves via recordNav().
+   */
+  switchTab(id) {
+    var _a, _b, _c, _d, _e, _f, _g;
+    this.activeTab = id;
+    (_a = this.tabBarEl) == null ? void 0 : _a.querySelectorAll(".wb-tab").forEach((b) => b.removeClass("active"));
+    (_c = (_b = this.tabBarEl) == null ? void 0 : _b.querySelector(`.wb-tab[data-tab="${id}"]`)) == null ? void 0 : _c.addClass("active");
+    Object.values(this.tabContents).forEach((c) => {
+      c == null ? void 0 : c.head.removeClass("active");
+      c == null ? void 0 : c.body.removeClass("active");
+    });
+    (_d = this.tabContents[id]) == null ? void 0 : _d.head.addClass("active");
+    (_e = this.tabContents[id]) == null ? void 0 : _e.body.addClass("active");
+    (_f = this.showTabSearchFn) == null ? void 0 : _f.call(this);
+    (_g = this.updateShadowFn) == null ? void 0 : _g.call(this);
+  }
+  /**
+   * Records where the sidebar is now pointed (which tab, and which card - if any - is the one the
+   * user just navigated to) as a Back/Forward history entry. Ignored while a Back/Forward click is
+   * itself replaying a past entry, and skipped if it's identical to the current entry.
+   */
+  recordNav(tab, cardPath) {
+    if (this.restoringNav) return;
+    const top = this.navHistory[this.navIndex];
+    if (top && top.tab === tab && top.cardPath === cardPath) return;
+    this.navHistory = this.navHistory.slice(0, this.navIndex + 1);
+    this.navHistory.push({ tab, cardPath });
+    this.navIndex = this.navHistory.length - 1;
+    this.updateNavButtonStates();
+  }
+  updateNavButtonStates() {
+    const canBack = this.navIndex > 0;
+    const canForward = this.navIndex < this.navHistory.length - 1;
+    for (const { back, fwd } of this.navButtons) {
+      back.toggleAttribute("disabled", !canBack);
+      fwd.toggleAttribute("disabled", !canForward);
+    }
+    this.refreshCurrentCardHighlight();
+  }
+  /**
+   * Marks the card at the current point in the nav history (if any) as the "current" one, with an
+   * accent-colored border, and makes sure it's the only card so marked. Derived fresh from
+   * navHistory every time rather than tracked separately, so there's never more than one: expanding
+   * or jumping to a different card, collapsing the current one, or stepping Back/Forward all just
+   * change which entry (if any) is at navIndex, and this re-reads that.
+   */
+  refreshCurrentCardHighlight() {
+    this.containerEl.querySelectorAll(".wb-card-current").forEach((el) => el.removeClass("wb-card-current"));
+    const current = this.navHistory[this.navIndex];
+    if (!(current == null ? void 0 : current.cardPath)) return;
+    const pane = this.tabContents[current.tab];
+    const card = pane == null ? void 0 : pane.body.querySelector(`.wb-card[data-path="${CSS.escape(current.cardPath)}"]`);
+    card == null ? void 0 : card.addClass("wb-card-current");
+  }
+  navigateBack() {
+    if (this.navIndex <= 0) return;
+    this.navIndex--;
+    this.applyNavEntry(this.navHistory[this.navIndex]);
+  }
+  navigateForward() {
+    if (this.navIndex >= this.navHistory.length - 1) return;
+    this.navIndex++;
+    this.applyNavEntry(this.navHistory[this.navIndex]);
+  }
+  applyNavEntry(entry) {
+    this.restoringNav = true;
+    try {
+      this.switchTab(entry.tab);
+      if (entry.cardPath) this.revealCard(entry.tab, entry.cardPath);
+    } finally {
+      this.restoringNav = false;
+    }
+    this.updateNavButtonStates();
+  }
+  /**
+   * Follows a wiki-link clicked inside an expanded card's preview: if the target note has its own
+   * card somewhere in the sidebar, switches to that tab, expands its card and scrolls it into view
+   * instead of opening the note in the main editor. Anything outside the tracked sections (or an
+   * unresolved link) falls back to Obsidian's normal "open the note" behavior.
+   */
+  followWikiLink(linktext, sourcePath) {
+    const linkPath = linktext.split("#")[0];
+    const dest = this.app.metadataCache.getFirstLinkpathDest(linkPath, sourcePath);
+    if (!dest) {
+      new import_obsidian.Notice(`Couldn't find "${linktext}".`);
+      return;
+    }
+    const tab = this.findEntryTab(dest);
+    if (!tab) {
+      this.app.workspace.getLeaf().openFile(dest);
+      return;
+    }
+    if (tab !== this.activeTab) this.switchTab(tab);
+    this.revealCard(tab, dest.path);
+  }
+  /**
+   * Brings one tab's card into view: un-collapses its employer group if needed, clears an active
+   * search filter that would otherwise hide it, expands it (recording that as a nav entry, same as
+   * a direct click would), and scrolls it into view.
+   */
+  revealCard(tab, path) {
+    var _a;
+    const pane = this.tabContents[tab];
+    if (!pane) return;
+    const card = pane.body.querySelector(`.wb-card[data-path="${CSS.escape(path)}"]`);
+    if (!card) return;
+    const list = card.closest(".wb-list");
+    if (list == null ? void 0 : list.classList.contains("is-collapsed")) {
+      list.removeClass("is-collapsed");
+      const header = list.previousElementSibling;
+      if (header instanceof HTMLElement && header.classList.contains("wb-group-header")) {
+        header.removeClass("is-collapsed");
+        header.setAttribute("aria-expanded", "true");
+      }
+    }
+    if (card.classList.contains("wb-filtered-out") && this.searchQueries[tab]) {
+      this.searchQueries[tab] = "";
+      this.applySearch(tab);
+      if (tab === this.activeTab) (_a = this.showTabSearchFn) == null ? void 0 : _a.call(this);
+    }
+    if (!card.classList.contains("wb-card-expanded")) {
+      const entry = this.entryByPath.get(path);
+      if (entry) this.toggleCardExpand(tab, card, entry);
+    }
+    card.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+  /**
+   * Makes the cards in one list drag-sortable (an employer's character group, or a whole flat
+   * tab like Locations or Lore). Each list only accepts cards that were picked up from that same
+   * list, so entries can't be dragged between employers or between tabs. The new order is handed
+   * to `onReorder` to persist to plugin data; notes themselves are never modified.
+   */
+  enableReorder(list, onReorder) {
     let dragged = null;
     let dropTarget = null;
     let dropAfter = false;
@@ -356,7 +794,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       if (!card || !e.dataTransfer) return;
       dragged = card;
       e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("application/x-wb-character", (_a = card.getAttribute("data-path")) != null ? _a : "");
+      e.dataTransfer.setData("application/x-wb-card", (_a = card.getAttribute("data-path")) != null ? _a : "");
       window.setTimeout(() => card.classList.add("wb-dragging"), 0);
     });
     list.addEventListener("dragend", () => {
@@ -386,13 +824,13 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       const moving = dragged;
       if (dropTarget && dropTarget !== moving) {
         list.insertBefore(moving, dropAfter ? dropTarget.nextSibling : dropTarget);
-        this.plugin.settings.characterOrder[groupKey] = Array.from(
-          list.querySelectorAll(".wb-card")
-        ).map((c) => {
-          var _a;
-          return (_a = c.getAttribute("data-path")) != null ? _a : "";
-        });
-        await this.plugin.saveSettings();
+        const order = Array.from(list.querySelectorAll(".wb-card")).map(
+          (c) => {
+            var _a;
+            return (_a = c.getAttribute("data-path")) != null ? _a : "";
+          }
+        );
+        await onReorder(order);
       }
       clearMarks();
     });
@@ -410,8 +848,7 @@ var CharacterModal = class extends import_obsidian.Modal {
       home: "",
       physicalDesc: "",
       personality: "",
-      goals: "",
-      secrets: ""
+      goals: ""
     };
     this.plugin = plugin;
     this.onDone = onDone;
@@ -453,10 +890,6 @@ var CharacterModal = class extends import_obsidian.Modal {
       t.inputEl.addClass("wb-textarea");
       t.onChange((v) => this.data.goals = v);
     });
-    new import_obsidian.Setting(contentEl).setName("Secrets").addTextArea((t) => {
-      t.inputEl.addClass("wb-textarea");
-      t.onChange((v) => this.data.secrets = v);
-    });
     new import_obsidian.Setting(contentEl).addButton(
       (b) => b.setButtonText("Create").setCta().onClick(() => this.submit())
     );
@@ -467,6 +900,26 @@ var CharacterModal = class extends import_obsidian.Modal {
       return;
     }
     const folder = `${this.plugin.settings.worldFolder}/Characters`;
+    const sections = [
+      ["Origin", ""],
+      ["Physical Description", this.data.physicalDesc],
+      ["Occupation", ""],
+      ["Resume", ""],
+      ["Role In Story", ""],
+      ["Goals", this.data.goals],
+      ["Personality", this.data.personality],
+      ["Habits/Mannerisms", ""],
+      ["Earlier Life", ""],
+      ["Internal Conflicts", ""],
+      ["External Conflicts", ""]
+    ];
+    const headingColor = "#fac08f";
+    const sectionLines = [];
+    for (const [heading, text] of sections) {
+      sectionLines.push(`## <font color="${headingColor}">${heading}</font>`);
+      if (text) sectionLines.push(text);
+      sectionLines.push("");
+    }
     const content = [
       "---",
       `name: "${this.data.name}"`,
@@ -480,17 +933,7 @@ var CharacterModal = class extends import_obsidian.Modal {
       "",
       `# ${this.data.name}`,
       "",
-      "## Physical Description",
-      this.data.physicalDesc || "_None provided._",
-      "",
-      "## Personality",
-      this.data.personality || "_None provided._",
-      "",
-      "## Goals",
-      this.data.goals || "_None provided._",
-      "",
-      "## Secrets",
-      this.data.secrets || "_None provided._"
+      ...sectionLines
     ].join("\n");
     const file = await createNote(this.app, folder, this.data.name, content);
     new import_obsidian.Notice(`Character "${this.data.name}" created.`);
@@ -847,6 +1290,14 @@ var WorldBuilderPlugin = class extends import_obsidian.Plugin {
             changed = true;
           }
         }
+        for (const order of Object.values(this.settings.sectionOrder)) {
+          if (!order) continue;
+          const i = order.indexOf(oldPath);
+          if (i !== -1) {
+            order[i] = file.path;
+            changed = true;
+          }
+        }
         if (changed) await this.saveSettings();
       })
     );
@@ -869,11 +1320,12 @@ var WorldBuilderPlugin = class extends import_obsidian.Plugin {
     }
   }
   async loadSettings() {
-    var _a, _b;
+    var _a, _b, _c;
     const data = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
     this.settings.characterOrder = (_a = data == null ? void 0 : data.characterOrder) != null ? _a : {};
     this.settings.collapsedEmployers = (_b = data == null ? void 0 : data.collapsedEmployers) != null ? _b : [];
+    this.settings.sectionOrder = (_c = data == null ? void 0 : data.sectionOrder) != null ? _c : {};
   }
   async saveSettings() {
     await this.saveData(this.settings);

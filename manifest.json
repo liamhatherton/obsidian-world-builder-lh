@@ -1,10 +1,10 @@
 {
   "id": "world-builder-lh",
-  "name": "World Builder (modified for Liam Hatherton project)",
+  "name": "Hatherton's World Builder",
   "version": "100.0.1",
   "minAppVersion": "1.4.0",
-  "description": "[LH MOD] A fiction world-building toolkit: characters, locations, employers, lore entries, and timeline events.",
-  "author": "wesswart77",
+  "description": "A fiction world-building toolkit: characters, locations, employers, lore entries, and timeline events. Originally authored by wesswart77.",
+  "author": "liamhatherton",
   "authorUrl": "https://github.com/liamhatherton",
   "fundingUrl": "https://www.buymeacoffee.com/wesswart77",
   "isDesktopOnly": false
