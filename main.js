@@ -130,7 +130,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     const fixed = containerEl.createDiv("wb-fixed");
     const scroll = containerEl.createDiv("wb-scroll");
     const header = fixed.createDiv("wb-header");
-    header.createEl("h2", { text: "Hatherton World Builder" });
+    header.createEl("h2", { text: "Hatherton's World Builder" });
     const tabBar = fixed.createDiv("wb-tabs");
     const tabs = [
       { id: "characters", label: "Characters" },

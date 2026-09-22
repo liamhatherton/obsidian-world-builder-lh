@@ -199,7 +199,7 @@ class WorldBuilderView extends ItemView {
 		const scroll = containerEl.createDiv("wb-scroll");
 
 		const header = fixed.createDiv("wb-header");
-		header.createEl("h2", { text: "Hatherton World Builder" });
+		header.createEl("h2", { text: "Hatherton's World Builder" });
 
 		const tabBar = fixed.createDiv("wb-tabs");
 		const tabs: { id: WBTab; label: string }[] = [
