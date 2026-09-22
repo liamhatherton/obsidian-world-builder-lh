@@ -109,7 +109,7 @@
 	width: var(--wb-thumb-size);
 	height: var(--wb-thumb-size);
 	aspect-ratio: 1 / 1;
-	border-radius: 1px;
+	border-radius: 8px;
 	background: #000; /* shown when the note has no image */
 	overflow: hidden;
 }

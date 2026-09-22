@@ -276,7 +276,8 @@ class WorldBuilderView extends ItemView {
 				title: fm.name ?? "Unnamed",
 				meta: `${fm.type ?? ""} ${fm.parent ? `· in ${fm.parent}` : ""}`.trim(),
 				badge: fm.type ?? "",
-			})
+			}),
+			{ thumbs: true }
 		);
 
 		await this.renderSection(
@@ -288,7 +289,8 @@ class WorldBuilderView extends ItemView {
 				title: fm.name ?? "Unnamed",
 				meta: fm.goals ?? "",
 				badge: fm.alignment ?? "",
-			})
+			}),
+			{ thumbs: true }
 		);
 
 		await this.renderSection(

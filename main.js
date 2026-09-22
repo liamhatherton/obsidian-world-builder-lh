@@ -228,7 +228,8 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
           meta: `${(_b2 = fm.type) != null ? _b2 : ""} ${fm.parent ? `\xB7 in ${fm.parent}` : ""}`.trim(),
           badge: (_c = fm.type) != null ? _c : ""
         };
-      }
+      },
+      { thumbs: true }
     );
     await this.renderSection(
       contents.employers,
@@ -242,7 +243,8 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
           meta: (_b2 = fm.goals) != null ? _b2 : "",
           badge: (_c = fm.alignment) != null ? _c : ""
         };
-      }
+      },
+      { thumbs: true }
     );
     await this.renderSection(
       contents.lore,
