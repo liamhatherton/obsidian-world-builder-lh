@@ -78,9 +78,44 @@
 	align-items: center;
 	justify-content: space-between;
 }
-.wb-section-header > span {
+.wb-section-title {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.wb-section-title > span {
 	font-size: 0.8em;
 	color: var(--text-muted);
+}
+
+/* Back/forward buttons, to the left of the section label. */
+.wb-nav-buttons {
+	display: flex;
+	gap: 2px;
+}
+.wb-nav-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	padding: 0;
+	background: none;
+	border: none;
+	box-shadow: none;
+	border-radius: 4px;
+	color: var(--text-muted);
+	font-size: 0.85em;
+	line-height: 1;
+	cursor: pointer;
+}
+.wb-nav-btn:hover:not(:disabled) {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+.wb-nav-btn:disabled {
+	opacity: 0.35;
+	cursor: default;
 }
 
 .wb-list {
@@ -211,6 +246,15 @@
 	border-color: var(--background-modifier-border-hover);
 }
 .wb-card.wb-card-expanded:hover {
+	border-color: var(--interactive-accent);
+}
+
+/*
+ * The one card currently at the front of the Back/Forward history (see refreshCurrentCardHighlight
+ * in main.ts) gets an accent-colored border instead of the plain "expanded" one, so it's easy to
+ * spot which section you're on while jumping between several expanded cards. Only ever one at a time.
+ */
+.wb-card.wb-card-expanded.wb-card-current {
 	border-color: var(--interactive-accent);
 }
 

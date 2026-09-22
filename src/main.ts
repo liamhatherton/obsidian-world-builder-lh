@@ -171,6 +171,25 @@ class WorldBuilderView extends ItemView {
 	private searchTargets: Partial<Record<WBTab, HTMLElement>> = {};
 	/** Normalised text each card is matched against. */
 	private searchIndex = new WeakMap<HTMLElement, string>();
+	/** Every note currently drawn in the sidebar, keyed by path, so a wiki-link click can find its entry. */
+	private entryByPath = new Map<string, NoteEntry>();
+
+	// Rebuilt on every render(); let switchTab() and the nav buttons operate without closures.
+	private tabBarEl: HTMLElement | null = null;
+	private tabContents: Partial<Record<WBTab, TabPane>> = {};
+	private showTabSearchFn: (() => void) | null = null;
+	private updateShadowFn: (() => void) | null = null;
+
+	/**
+	 * Back/forward history across tab switches and card expansions (including ones triggered by
+	 * clicking a wiki-link in an expanded card). Persists across render() calls; only the DOM it
+	 * points at is rebuilt.
+	 */
+	private navHistory: { tab: WBTab; cardPath: string | null }[] = [];
+	private navIndex = -1;
+	/** True while a back/forward navigation is replaying a history entry, so it isn't re-recorded. */
+	private restoringNav = false;
+	private navButtons: { back: HTMLButtonElement; fwd: HTMLButtonElement }[] = [];
 
 	constructor(leaf: WorkspaceLeaf, plugin: WorldBuilderPlugin) {
 		super(leaf);
@@ -192,6 +211,9 @@ class WorldBuilderView extends ItemView {
 		const searchHadFocus = !!oldSearch && containerEl.ownerDocument.activeElement === oldSearch;
 		containerEl.empty();
 		containerEl.addClass("wb-sidebar");
+		// Rebuilt below as the lists are (re)drawn.
+		this.entryByPath = new Map();
+		this.navButtons = [];
 
 		// Fixed region: title, tabs, the active tab's section header (Reload / + New) and the search bar.
 		// It never scrolls; the lists below it live in their own scrolling region.
@@ -210,19 +232,16 @@ class WorldBuilderView extends ItemView {
 			{ id: "timeline", label: "Timeline" },
 		];
 
+		this.tabBarEl = tabBar;
 		const contents: Partial<Record<WBTab, TabPane>> = {};
 		tabs.forEach(({ id, label }) => {
 			const btn = tabBar.createEl("button", { text: label, cls: "wb-tab" });
+			btn.setAttribute("data-tab", id);
 			if (id === this.activeTab) btn.addClass("active");
 			btn.onclick = () => {
-				this.activeTab = id;
-				tabBar.querySelectorAll(".wb-tab").forEach((b) => b.removeClass("active"));
-				btn.addClass("active");
-				Object.values(contents).forEach((c) => { c?.head.removeClass("active"); c?.body.removeClass("active"); });
-				contents[id]?.head.addClass("active");
-				contents[id]?.body.addClass("active");
-				showTabSearch();
-				updateShadow();
+				if (id === this.activeTab) return;
+				this.switchTab(id);
+				this.recordNav(id, null);
 			};
 			// Each tab has a header half (fixed region) and a body half (scrolling region).
 			const pane: TabPane = {
@@ -233,6 +252,7 @@ class WorldBuilderView extends ItemView {
 			contents[id] = pane;
 			this.searchTargets[id] = pane.body;
 		});
+		this.tabContents = contents;
 
 		// Search bar: last part of the fixed region, under the section header. Each tab keeps its own text.
 		const searchBox = fixed.createDiv("wb-search");
@@ -258,6 +278,8 @@ class WorldBuilderView extends ItemView {
 		// Shadow under the fixed region while the list is scrolled, so it reads as sitting on top of it.
 		const updateShadow = () => fixed.classList.toggle("is-scrolled", scroll.scrollTop > 0);
 		scroll.addEventListener("scroll", updateShadow, { passive: true });
+		this.showTabSearchFn = showTabSearch;
+		this.updateShadowFn = updateShadow;
 		const setQuery = (q: string) => {
 			this.searchQueries[this.activeTab] = q;
 			syncClear();
@@ -284,6 +306,7 @@ class WorldBuilderView extends ItemView {
 		const folder = this.plugin.settings.worldFolder;
 
 		await this.renderSection(
+			"characters",
 			contents.characters!,
 			`${folder}/Characters`,
 			"Characters",
@@ -303,6 +326,7 @@ class WorldBuilderView extends ItemView {
 		);
 
 		await this.renderSection(
+			"locations",
 			contents.locations!,
 			`${folder}/Locations`,
 			"Locations",
@@ -316,6 +340,7 @@ class WorldBuilderView extends ItemView {
 		);
 
 		await this.renderSection(
+			"employers",
 			contents.employers!,
 			`${folder}/Employers`,
 			"Employers",
@@ -329,6 +354,7 @@ class WorldBuilderView extends ItemView {
 		);
 
 		await this.renderSection(
+			"lore",
 			contents.lore!,
 			`${folder}/Lore`,
 			"Lore Entries",
@@ -342,6 +368,7 @@ class WorldBuilderView extends ItemView {
 		);
 
 		await this.renderSection(
+			"timeline",
 			contents.timeline!,
 			`${folder}/Timeline`,
 			"Timeline Events",
@@ -365,6 +392,13 @@ class WorldBuilderView extends ItemView {
 			const end = searchInput.value.length;
 			searchInput.setSelectionRange(end, end);
 		}
+
+		// Seed a starting point for Back/Forward the first time the sidebar ever renders.
+		if (this.navHistory.length === 0) {
+			this.navHistory = [{ tab: this.activeTab, cardPath: null }];
+			this.navIndex = 0;
+		}
+		this.updateNavButtonStates();
 	}
 
 	/**
@@ -445,6 +479,7 @@ class WorldBuilderView extends ItemView {
 	}
 
 	async renderSection(
+		tab: WBTab,
 		pane: TabPane,
 		folderPath: string,
 		label: string,
@@ -461,7 +496,23 @@ class WorldBuilderView extends ItemView {
 	) {
 		const container = pane.body;
 		const hdr = pane.head.createDiv("wb-section-header");
-		hdr.createEl("span", { text: label });
+		// Back/forward, then the label, grouped together at the left edge of the header.
+		const titleGroup = hdr.createDiv("wb-section-title");
+		const navGroup = titleGroup.createDiv("wb-nav-buttons");
+		const backBtn = navGroup.createEl("button", {
+			cls: "wb-nav-btn",
+			text: "<",
+			attr: { type: "button", "aria-label": "Back" },
+		});
+		const fwdBtn = navGroup.createEl("button", {
+			cls: "wb-nav-btn",
+			text: ">",
+			attr: { type: "button", "aria-label": "Forward" },
+		});
+		backBtn.onclick = () => this.navigateBack();
+		fwdBtn.onclick = () => this.navigateForward();
+		this.navButtons.push({ back: backBtn, fwd: fwdBtn });
+		titleGroup.createEl("span", { text: label });
 		const actions = hdr.createDiv("wb-section-actions");
 		if (opts.reload ?? true) {
 			const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary" });
@@ -487,12 +538,14 @@ class WorldBuilderView extends ItemView {
 		const entries: NoteEntry[] = [];
 		for (const file of files) {
 			const content = await this.app.vault.cachedRead(file);
-			entries.push({ file, content, fm: readFrontmatter(content) });
+			const entry: NoteEntry = { file, content, fm: readFrontmatter(content) };
+			entries.push(entry);
+			this.entryByPath.set(file.path, entry);
 		}
 
 		if (!opts.employerGroups) {
 			const list = container.createDiv("wb-list");
-			for (const entry of entries) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
+			for (const entry of entries) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
 			this.createNoResultsLine(container, label);
 			return;
 		}
@@ -560,7 +613,7 @@ class WorldBuilderView extends ItemView {
 				.sort((a, b) => rank(a.entry.file.path) - rank(b.entry.file.path) || a.index - b.index)
 				.map(({ entry }) => entry);
 
-			for (const entry of items) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
+			for (const entry of items) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
 			this.enableReorder(list, key);
 		}
 
@@ -576,6 +629,7 @@ class WorldBuilderView extends ItemView {
 	}
 
 	private renderCard(
+		tab: WBTab,
 		parent: HTMLElement,
 		entry: NoteEntry,
 		getCard: CardFn,
@@ -623,11 +677,11 @@ class WorldBuilderView extends ItemView {
 			card.setAttribute("role", "button");
 			card.setAttribute("tabindex", "0");
 			card.setAttribute("aria-expanded", "false");
-			card.onclick = () => this.toggleCardExpand(card, entry);
+			card.onclick = () => this.toggleCardExpand(tab, card, entry);
 			card.onkeydown = (e) => {
 				if (e.key === "Enter" || e.key === " ") {
 					e.preventDefault();
-					this.toggleCardExpand(card, entry);
+					this.toggleCardExpand(tab, card, entry);
 				}
 			};
 		} else {
@@ -641,12 +695,15 @@ class WorldBuilderView extends ItemView {
 	 * editor, so writing in the main pane isn't interrupted. An Edit button in the expanded area
 	 * still opens the note the normal way. Clicking the card again (or its chevron) collapses it.
 	 */
-	private toggleCardExpand(card: HTMLElement, entry: NoteEntry) {
+	private toggleCardExpand(tab: WBTab, card: HTMLElement, entry: NoteEntry) {
 		const wasExpanded = card.classList.contains("wb-card-expanded");
 		card.querySelector(":scope > .wb-card-expand")?.remove();
 		card.removeClass("wb-card-expanded");
 		card.setAttribute("aria-expanded", "false");
-		if (wasExpanded) return;
+		if (wasExpanded) {
+			this.recordNav(tab, null);
+			return;
+		}
 
 		card.addClass("wb-card-expanded");
 		card.setAttribute("aria-expanded", "true");
@@ -668,12 +725,186 @@ class WorldBuilderView extends ItemView {
 		const textOnly = stripGraphics(bodyText);
 		MarkdownRenderer.render(this.app, textOnly, body, entry.file.path, this);
 
+		// Wiki-links in the preview (e.g. "Part of: [[Colonia]]") are rendered as clickable text but
+		// do nothing on their own; jump to the linked note's own card instead of leaving the sidebar.
+		body.addEventListener("click", (e) => {
+			const target = e.target as HTMLElement;
+			const link = target.closest<HTMLElement>("a.internal-link");
+			if (!link) return;
+			e.preventDefault();
+			e.stopPropagation();
+			const href = link.getAttribute("data-href") ?? link.getAttribute("href");
+			if (href) this.followWikiLink(href, entry.file.path);
+		});
+
 		// Edit button sits at the bottom, under its own divider, so it doesn't compete with the text.
 		const footer = expand.createDiv("wb-card-expand-footer");
 		const editBtn = footer.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
 		setIcon(editBtn.createEl("span", { cls: "wb-btn-icon" }), "pencil");
 		editBtn.createEl("span", { text: "Edit" });
 		editBtn.onclick = () => this.app.workspace.getLeaf().openFile(entry.file);
+
+		this.recordNav(tab, entry.file.path);
+	}
+
+	/** The section folder a tab's notes live in, e.g. "World/Characters". */
+	private tabFolder(tab: WBTab): string {
+		const folder = this.plugin.settings.worldFolder;
+		const names: Record<WBTab, string> = {
+			characters: "Characters",
+			locations: "Locations",
+			employers: "Employers",
+			lore: "Lore",
+			timeline: "Timeline",
+		};
+		return `${folder}/${names[tab]}`;
+	}
+
+	/** Which tab (if any) a given file's own card lives on. */
+	private findEntryTab(file: TFile): WBTab | null {
+		const tabs: WBTab[] = ["characters", "locations", "employers", "lore", "timeline"];
+		for (const tab of tabs) {
+			if (file.path.startsWith(this.tabFolder(tab) + "/")) return tab;
+		}
+		return null;
+	}
+
+	/**
+	 * Switches the active tab's DOM (fixed header half + scrolling body half) without touching
+	 * navigation history — callers that count as a "navigation" record it themselves via recordNav().
+	 */
+	private switchTab(id: WBTab) {
+		this.activeTab = id;
+		this.tabBarEl?.querySelectorAll<HTMLElement>(".wb-tab").forEach((b) => b.removeClass("active"));
+		this.tabBarEl?.querySelector<HTMLElement>(`.wb-tab[data-tab="${id}"]`)?.addClass("active");
+		Object.values(this.tabContents).forEach((c) => { c?.head.removeClass("active"); c?.body.removeClass("active"); });
+		this.tabContents[id]?.head.addClass("active");
+		this.tabContents[id]?.body.addClass("active");
+		this.showTabSearchFn?.();
+		this.updateShadowFn?.();
+	}
+
+	/**
+	 * Records where the sidebar is now pointed (which tab, and which card - if any - is the one the
+	 * user just navigated to) as a Back/Forward history entry. Ignored while a Back/Forward click is
+	 * itself replaying a past entry, and skipped if it's identical to the current entry.
+	 */
+	private recordNav(tab: WBTab, cardPath: string | null) {
+		if (this.restoringNav) return;
+		const top = this.navHistory[this.navIndex];
+		if (top && top.tab === tab && top.cardPath === cardPath) return;
+		this.navHistory = this.navHistory.slice(0, this.navIndex + 1);
+		this.navHistory.push({ tab, cardPath });
+		this.navIndex = this.navHistory.length - 1;
+		this.updateNavButtonStates();
+	}
+
+	private updateNavButtonStates() {
+		const canBack = this.navIndex > 0;
+		const canForward = this.navIndex < this.navHistory.length - 1;
+		for (const { back, fwd } of this.navButtons) {
+			back.toggleAttribute("disabled", !canBack);
+			fwd.toggleAttribute("disabled", !canForward);
+		}
+		this.refreshCurrentCardHighlight();
+	}
+
+	/**
+	 * Marks the card at the current point in the nav history (if any) as the "current" one, with an
+	 * accent-colored border, and makes sure it's the only card so marked. Derived fresh from
+	 * navHistory every time rather than tracked separately, so there's never more than one: expanding
+	 * or jumping to a different card, collapsing the current one, or stepping Back/Forward all just
+	 * change which entry (if any) is at navIndex, and this re-reads that.
+	 */
+	private refreshCurrentCardHighlight() {
+		this.containerEl
+			.querySelectorAll<HTMLElement>(".wb-card-current")
+			.forEach((el) => el.removeClass("wb-card-current"));
+		const current = this.navHistory[this.navIndex];
+		if (!current?.cardPath) return;
+		const pane = this.tabContents[current.tab];
+		const card = pane?.body.querySelector<HTMLElement>(`.wb-card[data-path="${CSS.escape(current.cardPath)}"]`);
+		card?.addClass("wb-card-current");
+	}
+
+	private navigateBack() {
+		if (this.navIndex <= 0) return;
+		this.navIndex--;
+		this.applyNavEntry(this.navHistory[this.navIndex]);
+	}
+
+	private navigateForward() {
+		if (this.navIndex >= this.navHistory.length - 1) return;
+		this.navIndex++;
+		this.applyNavEntry(this.navHistory[this.navIndex]);
+	}
+
+	private applyNavEntry(entry: { tab: WBTab; cardPath: string | null }) {
+		this.restoringNav = true;
+		try {
+			this.switchTab(entry.tab);
+			if (entry.cardPath) this.revealCard(entry.tab, entry.cardPath);
+		} finally {
+			this.restoringNav = false;
+		}
+		this.updateNavButtonStates();
+	}
+
+	/**
+	 * Follows a wiki-link clicked inside an expanded card's preview: if the target note has its own
+	 * card somewhere in the sidebar, switches to that tab, expands its card and scrolls it into view
+	 * instead of opening the note in the main editor. Anything outside the tracked sections (or an
+	 * unresolved link) falls back to Obsidian's normal "open the note" behavior.
+	 */
+	private followWikiLink(linktext: string, sourcePath: string) {
+		const linkPath = linktext.split("#")[0]!;
+		const dest = this.app.metadataCache.getFirstLinkpathDest(linkPath, sourcePath);
+		if (!dest) {
+			new Notice(`Couldn't find "${linktext}".`);
+			return;
+		}
+		const tab = this.findEntryTab(dest);
+		if (!tab) {
+			this.app.workspace.getLeaf().openFile(dest);
+			return;
+		}
+		if (tab !== this.activeTab) this.switchTab(tab);
+		this.revealCard(tab, dest.path);
+	}
+
+	/**
+	 * Brings one tab's card into view: un-collapses its employer group if needed, clears an active
+	 * search filter that would otherwise hide it, expands it (recording that as a nav entry, same as
+	 * a direct click would), and scrolls it into view.
+	 */
+	private revealCard(tab: WBTab, path: string) {
+		const pane = this.tabContents[tab];
+		if (!pane) return;
+		const card = pane.body.querySelector<HTMLElement>(`.wb-card[data-path="${CSS.escape(path)}"]`);
+		if (!card) return;
+
+		const list = card.closest<HTMLElement>(".wb-list");
+		if (list?.classList.contains("is-collapsed")) {
+			list.removeClass("is-collapsed");
+			const header = list.previousElementSibling;
+			if (header instanceof HTMLElement && header.classList.contains("wb-group-header")) {
+				header.removeClass("is-collapsed");
+				header.setAttribute("aria-expanded", "true");
+			}
+		}
+
+		if (card.classList.contains("wb-filtered-out") && this.searchQueries[tab]) {
+			this.searchQueries[tab] = "";
+			this.applySearch(tab);
+			if (tab === this.activeTab) this.showTabSearchFn?.();
+		}
+
+		if (!card.classList.contains("wb-card-expanded")) {
+			const entry = this.entryByPath.get(path);
+			if (entry) this.toggleCardExpand(tab, card, entry);
+		}
+
+		card.scrollIntoView({ block: "center", behavior: "smooth" });
 	}
 
 	/**

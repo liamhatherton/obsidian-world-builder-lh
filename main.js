@@ -103,6 +103,23 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     this.searchTargets = {};
     /** Normalised text each card is matched against. */
     this.searchIndex = /* @__PURE__ */ new WeakMap();
+    /** Every note currently drawn in the sidebar, keyed by path, so a wiki-link click can find its entry. */
+    this.entryByPath = /* @__PURE__ */ new Map();
+    // Rebuilt on every render(); let switchTab() and the nav buttons operate without closures.
+    this.tabBarEl = null;
+    this.tabContents = {};
+    this.showTabSearchFn = null;
+    this.updateShadowFn = null;
+    /**
+     * Back/forward history across tab switches and card expansions (including ones triggered by
+     * clicking a wiki-link in an expanded card). Persists across render() calls; only the DOM it
+     * points at is rebuilt.
+     */
+    this.navHistory = [];
+    this.navIndex = -1;
+    /** True while a back/forward navigation is replaying a history entry, so it isn't re-recorded. */
+    this.restoringNav = false;
+    this.navButtons = [];
     this.plugin = plugin;
   }
   getViewType() {
@@ -127,6 +144,8 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     const searchHadFocus = !!oldSearch && containerEl.ownerDocument.activeElement === oldSearch;
     containerEl.empty();
     containerEl.addClass("wb-sidebar");
+    this.entryByPath = /* @__PURE__ */ new Map();
+    this.navButtons = [];
     const fixed = containerEl.createDiv("wb-fixed");
     const scroll = containerEl.createDiv("wb-scroll");
     const header = fixed.createDiv("wb-header");
@@ -139,23 +158,16 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       { id: "lore", label: "Lore" },
       { id: "timeline", label: "Timeline" }
     ];
+    this.tabBarEl = tabBar;
     const contents = {};
     tabs.forEach(({ id, label }) => {
       const btn = tabBar.createEl("button", { text: label, cls: "wb-tab" });
+      btn.setAttribute("data-tab", id);
       if (id === this.activeTab) btn.addClass("active");
       btn.onclick = () => {
-        var _a2, _b2;
-        this.activeTab = id;
-        tabBar.querySelectorAll(".wb-tab").forEach((b) => b.removeClass("active"));
-        btn.addClass("active");
-        Object.values(contents).forEach((c) => {
-          c == null ? void 0 : c.head.removeClass("active");
-          c == null ? void 0 : c.body.removeClass("active");
-        });
-        (_a2 = contents[id]) == null ? void 0 : _a2.head.addClass("active");
-        (_b2 = contents[id]) == null ? void 0 : _b2.body.addClass("active");
-        showTabSearch();
-        updateShadow();
+        if (id === this.activeTab) return;
+        this.switchTab(id);
+        this.recordNav(id, null);
       };
       const pane = {
         head: fixed.createDiv("wb-tab-content wb-tab-head"),
@@ -168,6 +180,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       contents[id] = pane;
       this.searchTargets[id] = pane.body;
     });
+    this.tabContents = contents;
     const searchBox = fixed.createDiv("wb-search");
     (0, import_obsidian.setIcon)(searchBox.createEl("span", { cls: "wb-search-icon" }), "search");
     const searchInput = searchBox.createEl("input", {
@@ -190,6 +203,8 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     };
     const updateShadow = () => fixed.classList.toggle("is-scrolled", scroll.scrollTop > 0);
     scroll.addEventListener("scroll", updateShadow, { passive: true });
+    this.showTabSearchFn = showTabSearch;
+    this.updateShadowFn = updateShadow;
     const setQuery = (q) => {
       this.searchQueries[this.activeTab] = q;
       syncClear();
@@ -214,6 +229,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     showTabSearch();
     const folder = this.plugin.settings.worldFolder;
     await this.renderSection(
+      "characters",
       contents.characters,
       `${folder}/Characters`,
       "Characters",
@@ -235,6 +251,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       { thumbs: true, employerGroups: true, stackBadge: true, expandable: true }
     );
     await this.renderSection(
+      "locations",
       contents.locations,
       `${folder}/Locations`,
       "Locations",
@@ -250,6 +267,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       { thumbs: true, expandable: true }
     );
     await this.renderSection(
+      "employers",
       contents.employers,
       `${folder}/Employers`,
       "Employers",
@@ -265,6 +283,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       { thumbs: true, expandable: true }
     );
     await this.renderSection(
+      "lore",
       contents.lore,
       `${folder}/Lore`,
       "Lore Entries",
@@ -280,6 +299,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       { expandable: true }
     );
     await this.renderSection(
+      "timeline",
       contents.timeline,
       `${folder}/Timeline`,
       "Timeline Events",
@@ -302,6 +322,11 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       const end = searchInput.value.length;
       searchInput.setSelectionRange(end, end);
     }
+    if (this.navHistory.length === 0) {
+      this.navHistory = [{ tab: this.activeTab, cardPath: null }];
+      this.navIndex = 0;
+    }
+    this.updateNavButtonStates();
   }
   /**
    * Hides the cards on one tab that don't match its search text (and, on Characters, any employer
@@ -377,11 +402,26 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     }
     return null;
   }
-  async renderSection(pane, folderPath, label, onCreate, getCard, opts = {}) {
+  async renderSection(tab, pane, folderPath, label, onCreate, getCard, opts = {}) {
     var _a, _b, _c;
     const container = pane.body;
     const hdr = pane.head.createDiv("wb-section-header");
-    hdr.createEl("span", { text: label });
+    const titleGroup = hdr.createDiv("wb-section-title");
+    const navGroup = titleGroup.createDiv("wb-nav-buttons");
+    const backBtn = navGroup.createEl("button", {
+      cls: "wb-nav-btn",
+      text: "<",
+      attr: { type: "button", "aria-label": "Back" }
+    });
+    const fwdBtn = navGroup.createEl("button", {
+      cls: "wb-nav-btn",
+      text: ">",
+      attr: { type: "button", "aria-label": "Forward" }
+    });
+    backBtn.onclick = () => this.navigateBack();
+    fwdBtn.onclick = () => this.navigateForward();
+    this.navButtons.push({ back: backBtn, fwd: fwdBtn });
+    titleGroup.createEl("span", { text: label });
     const actions = hdr.createDiv("wb-section-actions");
     if ((_a = opts.reload) != null ? _a : true) {
       const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary" });
@@ -404,11 +444,13 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     const entries = [];
     for (const file of files) {
       const content = await this.app.vault.cachedRead(file);
-      entries.push({ file, content, fm: readFrontmatter(content) });
+      const entry = { file, content, fm: readFrontmatter(content) };
+      entries.push(entry);
+      this.entryByPath.set(file.path, entry);
     }
     if (!opts.employerGroups) {
       const list = container.createDiv("wb-list");
-      for (const entry of entries) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
+      for (const entry of entries) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
       this.createNoResultsLine(container, label);
       return;
     }
@@ -460,7 +502,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         return i === -1 ? saved.length : i;
       };
       const items = group.items.map((entry, index) => ({ entry, index })).sort((a, b) => rank(a.entry.file.path) - rank(b.entry.file.path) || a.index - b.index).map(({ entry }) => entry);
-      for (const entry of items) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
+      for (const entry of items) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
       this.enableReorder(list, key);
     }
     this.createNoResultsLine(container, label);
@@ -472,7 +514,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       attr: { "data-noun": label.toLowerCase() }
     });
   }
-  renderCard(parent, entry, getCard, thumbs, stackBadge, expandable) {
+  renderCard(tab, parent, entry, getCard, thumbs, stackBadge, expandable) {
     const { file, content, fm } = entry;
     const { title, meta, badge, search } = getCard(fm);
     const card = parent.createDiv("wb-card");
@@ -505,11 +547,11 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       card.setAttribute("role", "button");
       card.setAttribute("tabindex", "0");
       card.setAttribute("aria-expanded", "false");
-      card.onclick = () => this.toggleCardExpand(card, entry);
+      card.onclick = () => this.toggleCardExpand(tab, card, entry);
       card.onkeydown = (e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          this.toggleCardExpand(card, entry);
+          this.toggleCardExpand(tab, card, entry);
         }
       };
     } else {
@@ -522,13 +564,16 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
    * editor, so writing in the main pane isn't interrupted. An Edit button in the expanded area
    * still opens the note the normal way. Clicking the card again (or its chevron) collapses it.
    */
-  toggleCardExpand(card, entry) {
+  toggleCardExpand(tab, card, entry) {
     var _a;
     const wasExpanded = card.classList.contains("wb-card-expanded");
     (_a = card.querySelector(":scope > .wb-card-expand")) == null ? void 0 : _a.remove();
     card.removeClass("wb-card-expanded");
     card.setAttribute("aria-expanded", "false");
-    if (wasExpanded) return;
+    if (wasExpanded) {
+      this.recordNav(tab, null);
+      return;
+    }
     card.addClass("wb-card-expanded");
     card.setAttribute("aria-expanded", "true");
     const expand = card.createDiv("wb-card-expand");
@@ -539,11 +584,170 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     const bodyText = stripLeadingHeading(stripFrontmatterBlock(entry.content));
     const textOnly = stripGraphics(bodyText);
     import_obsidian.MarkdownRenderer.render(this.app, textOnly, body, entry.file.path, this);
+    body.addEventListener("click", (e) => {
+      var _a2;
+      const target = e.target;
+      const link = target.closest("a.internal-link");
+      if (!link) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const href = (_a2 = link.getAttribute("data-href")) != null ? _a2 : link.getAttribute("href");
+      if (href) this.followWikiLink(href, entry.file.path);
+    });
     const footer = expand.createDiv("wb-card-expand-footer");
     const editBtn = footer.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
     (0, import_obsidian.setIcon)(editBtn.createEl("span", { cls: "wb-btn-icon" }), "pencil");
     editBtn.createEl("span", { text: "Edit" });
     editBtn.onclick = () => this.app.workspace.getLeaf().openFile(entry.file);
+    this.recordNav(tab, entry.file.path);
+  }
+  /** The section folder a tab's notes live in, e.g. "World/Characters". */
+  tabFolder(tab) {
+    const folder = this.plugin.settings.worldFolder;
+    const names = {
+      characters: "Characters",
+      locations: "Locations",
+      employers: "Employers",
+      lore: "Lore",
+      timeline: "Timeline"
+    };
+    return `${folder}/${names[tab]}`;
+  }
+  /** Which tab (if any) a given file's own card lives on. */
+  findEntryTab(file) {
+    const tabs = ["characters", "locations", "employers", "lore", "timeline"];
+    for (const tab of tabs) {
+      if (file.path.startsWith(this.tabFolder(tab) + "/")) return tab;
+    }
+    return null;
+  }
+  /**
+   * Switches the active tab's DOM (fixed header half + scrolling body half) without touching
+   * navigation history — callers that count as a "navigation" record it themselves via recordNav().
+   */
+  switchTab(id) {
+    var _a, _b, _c, _d, _e, _f, _g;
+    this.activeTab = id;
+    (_a = this.tabBarEl) == null ? void 0 : _a.querySelectorAll(".wb-tab").forEach((b) => b.removeClass("active"));
+    (_c = (_b = this.tabBarEl) == null ? void 0 : _b.querySelector(`.wb-tab[data-tab="${id}"]`)) == null ? void 0 : _c.addClass("active");
+    Object.values(this.tabContents).forEach((c) => {
+      c == null ? void 0 : c.head.removeClass("active");
+      c == null ? void 0 : c.body.removeClass("active");
+    });
+    (_d = this.tabContents[id]) == null ? void 0 : _d.head.addClass("active");
+    (_e = this.tabContents[id]) == null ? void 0 : _e.body.addClass("active");
+    (_f = this.showTabSearchFn) == null ? void 0 : _f.call(this);
+    (_g = this.updateShadowFn) == null ? void 0 : _g.call(this);
+  }
+  /**
+   * Records where the sidebar is now pointed (which tab, and which card - if any - is the one the
+   * user just navigated to) as a Back/Forward history entry. Ignored while a Back/Forward click is
+   * itself replaying a past entry, and skipped if it's identical to the current entry.
+   */
+  recordNav(tab, cardPath) {
+    if (this.restoringNav) return;
+    const top = this.navHistory[this.navIndex];
+    if (top && top.tab === tab && top.cardPath === cardPath) return;
+    this.navHistory = this.navHistory.slice(0, this.navIndex + 1);
+    this.navHistory.push({ tab, cardPath });
+    this.navIndex = this.navHistory.length - 1;
+    this.updateNavButtonStates();
+  }
+  updateNavButtonStates() {
+    const canBack = this.navIndex > 0;
+    const canForward = this.navIndex < this.navHistory.length - 1;
+    for (const { back, fwd } of this.navButtons) {
+      back.toggleAttribute("disabled", !canBack);
+      fwd.toggleAttribute("disabled", !canForward);
+    }
+    this.refreshCurrentCardHighlight();
+  }
+  /**
+   * Marks the card at the current point in the nav history (if any) as the "current" one, with an
+   * accent-colored border, and makes sure it's the only card so marked. Derived fresh from
+   * navHistory every time rather than tracked separately, so there's never more than one: expanding
+   * or jumping to a different card, collapsing the current one, or stepping Back/Forward all just
+   * change which entry (if any) is at navIndex, and this re-reads that.
+   */
+  refreshCurrentCardHighlight() {
+    this.containerEl.querySelectorAll(".wb-card-current").forEach((el) => el.removeClass("wb-card-current"));
+    const current = this.navHistory[this.navIndex];
+    if (!(current == null ? void 0 : current.cardPath)) return;
+    const pane = this.tabContents[current.tab];
+    const card = pane == null ? void 0 : pane.body.querySelector(`.wb-card[data-path="${CSS.escape(current.cardPath)}"]`);
+    card == null ? void 0 : card.addClass("wb-card-current");
+  }
+  navigateBack() {
+    if (this.navIndex <= 0) return;
+    this.navIndex--;
+    this.applyNavEntry(this.navHistory[this.navIndex]);
+  }
+  navigateForward() {
+    if (this.navIndex >= this.navHistory.length - 1) return;
+    this.navIndex++;
+    this.applyNavEntry(this.navHistory[this.navIndex]);
+  }
+  applyNavEntry(entry) {
+    this.restoringNav = true;
+    try {
+      this.switchTab(entry.tab);
+      if (entry.cardPath) this.revealCard(entry.tab, entry.cardPath);
+    } finally {
+      this.restoringNav = false;
+    }
+    this.updateNavButtonStates();
+  }
+  /**
+   * Follows a wiki-link clicked inside an expanded card's preview: if the target note has its own
+   * card somewhere in the sidebar, switches to that tab, expands its card and scrolls it into view
+   * instead of opening the note in the main editor. Anything outside the tracked sections (or an
+   * unresolved link) falls back to Obsidian's normal "open the note" behavior.
+   */
+  followWikiLink(linktext, sourcePath) {
+    const linkPath = linktext.split("#")[0];
+    const dest = this.app.metadataCache.getFirstLinkpathDest(linkPath, sourcePath);
+    if (!dest) {
+      new import_obsidian.Notice(`Couldn't find "${linktext}".`);
+      return;
+    }
+    const tab = this.findEntryTab(dest);
+    if (!tab) {
+      this.app.workspace.getLeaf().openFile(dest);
+      return;
+    }
+    if (tab !== this.activeTab) this.switchTab(tab);
+    this.revealCard(tab, dest.path);
+  }
+  /**
+   * Brings one tab's card into view: un-collapses its employer group if needed, clears an active
+   * search filter that would otherwise hide it, expands it (recording that as a nav entry, same as
+   * a direct click would), and scrolls it into view.
+   */
+  revealCard(tab, path) {
+    var _a;
+    const pane = this.tabContents[tab];
+    if (!pane) return;
+    const card = pane.body.querySelector(`.wb-card[data-path="${CSS.escape(path)}"]`);
+    if (!card) return;
+    const list = card.closest(".wb-list");
+    if (list == null ? void 0 : list.classList.contains("is-collapsed")) {
+      list.removeClass("is-collapsed");
+      const header = list.previousElementSibling;
+      if (header instanceof HTMLElement && header.classList.contains("wb-group-header")) {
+        header.removeClass("is-collapsed");
+        header.setAttribute("aria-expanded", "true");
+      }
+    }
+    if (card.classList.contains("wb-filtered-out") && this.searchQueries[tab]) {
+      this.searchQueries[tab] = "";
+      this.applySearch(tab);
+      if (tab === this.activeTab) (_a = this.showTabSearchFn) == null ? void 0 : _a.call(this);
+    }
+    if (!card.classList.contains("wb-card-expanded")) {
+      const entry = this.entryByPath.get(path);
+      if (entry) this.toggleCardExpand(tab, card, entry);
+    }
+    card.scrollIntoView({ block: "center", behavior: "smooth" });
   }
   /**
    * Makes the cards in one employer's list drag-sortable. Each list only accepts cards
