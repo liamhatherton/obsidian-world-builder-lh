@@ -233,8 +233,24 @@
 .wb-list .wb-card[draggable="true"] { cursor: grab; }
 .wb-list .wb-card[draggable="true"]:active { cursor: grabbing; }
 .wb-card.wb-dragging { opacity: 0.4; }
-.wb-card.wb-drop-before { box-shadow: 0 -3px 0 0 var(--interactive-accent); }
-.wb-card.wb-drop-after { box-shadow: 0 3px 0 0 var(--interactive-accent); }
+.wb-list > .wb-drop-before { box-shadow: 0 -3px 0 0 var(--interactive-accent); }
+.wb-list > .wb-drop-after { box-shadow: 0 3px 0 0 var(--interactive-accent); }
+
+/*
+ * Hierarchical tabs (Locations): every parent gets a collapsible label (same look as the Employers
+ * headers) right above its card. Collapsing it hides that card and its whole .wb-child-group
+ * subtree. The label sits inside the flex list, so the list's gap spaces it from its card.
+ */
+.wb-list > .wb-group-header.wb-tree-header:not(.wb-filtered-out) { margin: 10px 0 0; }
+.wb-list > .wb-group-header.wb-tree-header:first-child:not(.wb-filtered-out) { margin-top: 0; }
+.wb-tab-body:not(.is-searching) .wb-tree-hidden { display: none; }
+/* A whole-section label on a hierarchical tab (e.g. Ships on Locations), set off from the tree above it. */
+/* A horizontal rule above it separates it from the entries before it. */
+.wb-tab-body > .wb-group-header.wb-tree-section-header {
+	margin-top: 16px;
+	padding-top: 12px;
+	border-top: 1px solid var(--background-modifier-border-hover);
+}
 
 .wb-card-title {
 	font-weight: 600;

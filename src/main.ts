@@ -20,6 +20,10 @@ interface WorldBuilderSettings {
 	characterOrder: Record<string, string[]>;
 	/** Lower-cased employer names whose character sub-section is collapsed. */
 	collapsedEmployers: string[];
+	/** Employer type groups ("corporation", "government", "criminal", "" = unassigned) collapsed on the Employers tab. */
+	collapsedEmployerTypes: string[];
+	/** Note paths of parent entries on hierarchical tabs (Locations) whose subtree is collapsed. */
+	collapsedParents: string[];
 	/** Custom manual order for the flat (non-Characters) tabs, keyed by tab id -> ordered note paths. */
 	sectionOrder: Partial<Record<WBTab, string[]>>;
 }
@@ -27,13 +31,27 @@ const DEFAULT_SETTINGS: WorldBuilderSettings = {
 	worldFolder: "World",
 	characterOrder: {},
 	collapsedEmployers: [],
+	collapsedEmployerTypes: [],
+	collapsedParents: [],
 	sectionOrder: {},
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/** Employer "type" property values, in the order their groups appear on the Employers tab. */
+const EMPLOYER_TYPES: { key: string; label: string }[] = [
+	{ key: "corporation", label: "Corporation" },
+	{ key: "government", label: "Government" },
+	{ key: "criminal", label: "Criminal" },
+];
+
 function slugify(s: string) {
 	return s.replace(/[/\\:*?"<>|#^[\]]/g, "-").trim();
+}
+
+/** Locations whose `type` is "ship": mobile, so they get their own Ships section instead of nesting. */
+function isShip(fm: Record<string, string>): boolean {
+	return (fm.type ?? "").trim().toLowerCase() === "ship";
 }
 
 /** Extensions treated as "graphics" when filtering images out of note text. */
@@ -263,6 +281,8 @@ class WorldBuilderView extends ItemView {
 	private entryByPath = new Map<string, NoteEntry>();
 	/** Tabs whose lists nest child entries under their parent (see renderHierarchicalGroup). */
 	private readonly hierarchicalTabs = new Set<WBTab>(["locations"]);
+	/** Un-collapses one hierarchical parent's subtree, keyed by the parent's note path (used by revealCard). */
+	private treeExpanders = new Map<string, () => Promise<void>>();
 
 	// Rebuilt on every render(); let switchTab() and the nav buttons operate without closures.
 	private tabBarEl: HTMLElement | null = null;
@@ -303,6 +323,7 @@ class WorldBuilderView extends ItemView {
 		containerEl.addClass("wb-sidebar");
 		// Rebuilt below as the lists are (re)drawn.
 		this.entryByPath = new Map();
+		this.treeExpanders = new Map();
 		this.navButtons = [];
 
 		// Fixed region: title, tabs, the active tab's section header (Reload / + New) and the search bar.
@@ -423,15 +444,19 @@ class WorldBuilderView extends ItemView {
 			() => new LocationModal(this.app, this.plugin, () => this.render()).open(),
 			(fm) => ({
 				title: fm.name ?? "Unnamed",
-				meta: `${fm.type ?? ""} ${fm.parent ? `· in ${fm.parent}` : ""}`.trim(),
+				// Type already shows as the badge, so the sub-line is just the parent location.
+				meta: (fm.parent ?? "").trim(),
 				badge: fm.type ?? "",
 			}),
 			{
 				thumbs: true,
 				expandable: true,
 				hierarchical: true,
-				getParentName: (fm) => fm.parent ?? "",
+				// Ships travel, so their `parent` (where they are right now) never nests them: they
+				// always start their own tree, drawn in the separate Ships section below.
+				getParentName: (fm) => (isShip(fm) ? "" : fm.parent ?? ""),
 				getOwnName: (fm) => fm.name ?? "",
+				movableSection: { label: "Ships", isMovable: isShip },
 			}
 		);
 
@@ -446,7 +471,7 @@ class WorldBuilderView extends ItemView {
 				meta: fm.goals ?? "",
 				badge: fm.alignment ?? "",
 			}),
-			{ thumbs: true, expandable: true }
+			{ thumbs: true, expandable: true, typeGroups: true }
 		);
 
 		await this.renderSection(
@@ -542,12 +567,21 @@ class WorldBuilderView extends ItemView {
 					const descendantMatch = childList ? evalGroup(childList) : false;
 					const show = ownMatch || descendantMatch;
 					card.classList.toggle("wb-filtered-out", searching && !show);
+					const treeHeader = card.previousElementSibling;
+					if (treeHeader?.classList.contains("wb-tree-header")) {
+						treeHeader.classList.toggle("wb-filtered-out", searching && !show);
+					}
 					if (show) anyVisible = true;
 				});
 				return anyVisible;
 			};
-			const topList = body.querySelector<HTMLElement>(":scope > .wb-list");
-			if (topList) evalGroup(topList);
+			body.querySelectorAll<HTMLElement>(":scope > .wb-list").forEach((topList) => {
+				const anyVisible = evalGroup(topList);
+				const sectionHeader = topList.previousElementSibling;
+				if (sectionHeader?.classList.contains("wb-tree-section-header")) {
+					sectionHeader.classList.toggle("wb-filtered-out", searching && !anyVisible);
+				}
+			});
 		} else {
 			body.querySelectorAll<HTMLElement>(".wb-group-header").forEach((header) => {
 				const list = header.nextElementSibling;
@@ -612,6 +646,8 @@ class WorldBuilderView extends ItemView {
 			thumbs?: boolean;
 			reload?: boolean;
 			employerGroups?: boolean;
+			/** Employers: group entries under collapsible Corporation / Government / Criminal headers by their `type` property. */
+			typeGroups?: boolean;
 			stackBadge?: boolean;
 			/** Clicking a card expands an in-sidebar, text-only preview instead of opening the note. */
 			expandable?: boolean;
@@ -619,6 +655,8 @@ class WorldBuilderView extends ItemView {
 			hierarchical?: boolean;
 			getParentName?: (fm: Record<string, string>) => string;
 			getOwnName?: (fm: Record<string, string>) => string;
+			/** Hierarchical tabs: roots matching isMovable (and their children) go in their own collapsible section, drawn last. */
+			movableSection?: { label: string; isMovable: (fm: Record<string, string>) => boolean };
 		} = {}
 	) {
 		const container = pane.body;
@@ -676,9 +714,28 @@ class WorldBuilderView extends ItemView {
 				opts.getParentName ?? (() => ""),
 				opts.getOwnName ?? ((fm) => fm.name ?? "")
 			);
+			const movable = opts.movableSection;
+			const fixedRoots = movable ? roots.filter((e) => !movable.isMovable(e.fm)) : roots;
+			const movableRoots = movable ? roots.filter((e) => movable.isMovable(e.fm)) : [];
 			this.renderHierarchicalGroup(
-				tab, container, roots, entries, childrenOf, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable
+				tab, container, fixedRoots, entries, childrenOf, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable
 			);
+			if (movable && movableRoots.length) {
+				// Same collapsible label as a parent location, but heading a whole section of its own.
+				const header = this.createTreeHeader(container, movable.label);
+				header.addClass("wb-tree-section-header");
+				this.renderHierarchicalGroup(
+					tab, container, movableRoots, entries, childrenOf, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable
+				);
+				const sectionList = header.nextElementSibling as HTMLElement;
+				this.wireTreeCollapse(tab, header, [sectionList], `${tab}:section:${movable.label.toLowerCase()}`);
+			}
+			this.createNoResultsLine(container, label);
+			return;
+		}
+
+		if (opts.typeGroups) {
+			this.renderTypeGroups(tab, container, entries, getCard, opts);
 			this.createNoResultsLine(container, label);
 			return;
 		}
@@ -754,7 +811,7 @@ class WorldBuilderView extends ItemView {
 
 			const toggleCollapsed = async () => {
 				// While searching, matching sections are shown open regardless; leave the saved state alone.
-				if (normalizeForSearch(this.searchQueries.characters).trim()) return;
+				if (normalizeForSearch(this.searchQueries[tab]).trim()) return;
 				const settings = this.plugin.settings;
 				const collapse = !settings.collapsedEmployers.includes(key);
 				settings.collapsedEmployers = collapse
@@ -782,6 +839,74 @@ class WorldBuilderView extends ItemView {
 		}
 
 		this.createNoResultsLine(container, label);
+	}
+
+	/**
+	 * Employers: one collapsible sub-section per `type` property (Corporation, Government, then Criminal),
+	 * with employers that have no recognised type in an "Unassigned" section last. Headers use the
+	 * same chevron as the Characters employer groups, without a logo. Each section is its own
+	 * drag-to-reorder list; its order is merged back into the tab's single saved order.
+	 */
+	private renderTypeGroups(
+		tab: WBTab,
+		container: HTMLElement,
+		entries: NoteEntry[],
+		getCard: CardFn,
+		opts: { thumbs?: boolean; stackBadge?: boolean; expandable?: boolean }
+	) {
+		const known = new Set(EMPLOYER_TYPES.map((t) => t.key));
+		const groups = new Map<string, NoteEntry[]>();
+		for (const entry of entries) {
+			const raw = (entry.fm.type ?? "").trim().toLowerCase();
+			const key = known.has(raw) ? raw : "";
+			if (!groups.has(key)) groups.set(key, []);
+			groups.get(key)!.push(entry);
+		}
+
+		const sections = [...EMPLOYER_TYPES, { key: "", label: "Unassigned" }].filter((t) => groups.has(t.key));
+		for (const { key, label } of sections) {
+			const header = container.createDiv("wb-group-header");
+			header.setAttribute("role", "button");
+			header.setAttribute("tabindex", "0");
+			setIcon(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
+			header.createEl("span", { cls: "wb-group-title", text: label });
+			const list = container.createDiv("wb-list");
+
+			const applyCollapsed = (collapsed: boolean) => {
+				header.classList.toggle("is-collapsed", collapsed);
+				list.classList.toggle("is-collapsed", collapsed);
+				header.setAttribute("aria-expanded", String(!collapsed));
+			};
+			applyCollapsed(this.plugin.settings.collapsedEmployerTypes.includes(key));
+
+			const toggleCollapsed = async () => {
+				// While searching, matching sections are shown open regardless; leave the saved state alone.
+				if (normalizeForSearch(this.searchQueries[tab]).trim()) return;
+				const settings = this.plugin.settings;
+				const collapse = !settings.collapsedEmployerTypes.includes(key);
+				settings.collapsedEmployerTypes = collapse
+					? [...settings.collapsedEmployerTypes, key]
+					: settings.collapsedEmployerTypes.filter((k) => k !== key);
+				applyCollapsed(collapse);
+				await this.plugin.saveSettings();
+			};
+			header.onclick = toggleCollapsed;
+			header.onkeydown = (e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					toggleCollapsed();
+				}
+			};
+
+			const items = this.orderEntries(groups.get(key)!, this.plugin.settings.sectionOrder[tab] ?? []);
+			for (const entry of items) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
+			this.enableReorder(list, async (order) => {
+				const settings = this.plugin.settings;
+				const baseline = this.orderEntries(entries, settings.sectionOrder[tab] ?? []).map((e) => e.file.path);
+				settings.sectionOrder[tab] = mergeGroupOrder(baseline, items.map((e) => e.file.path), order);
+				await this.plugin.saveSettings();
+			});
+		}
 	}
 
 	/**
@@ -821,11 +946,15 @@ class WorldBuilderView extends ItemView {
 		const list = host.createDiv("wb-list");
 		const ordered = this.orderEntries(groupEntries, this.plugin.settings.sectionOrder[tab] ?? []);
 		for (const entry of ordered) {
-			this.renderCard(tab, list, entry, getCard, thumbs, stackBadge, expandable);
 			const kids = childrenOf.get(entry.file.path);
-			if (kids && kids.length) {
+			const hasKids = !!(kids && kids.length);
+			// Parents get an Employers-style collapsible label right above their card.
+			const header = hasKids ? this.createTreeHeader(list, getCard(entry.fm).title) : null;
+			const card = this.renderCard(tab, list, entry, getCard, thumbs, stackBadge, expandable);
+			if (header && kids) {
 				const childHost = list.createDiv("wb-child-group");
 				this.renderHierarchicalGroup(tab, childHost, kids, allEntries, childrenOf, getCard, thumbs, stackBadge, expandable);
+				this.wireTreeCollapse(tab, header, [card, childHost], entry.file.path);
 			}
 		}
 		this.enableReorder(list, async (order) => {
@@ -835,6 +964,56 @@ class WorldBuilderView extends ItemView {
 			settings.sectionOrder[tab] = mergeGroupOrder(baseline, groupPaths, order);
 			await this.plugin.saveSettings();
 		});
+	}
+
+	/** A collapsible label (chevron + name) drawn above a hierarchical parent's card. */
+	private createTreeHeader(list: HTMLElement, title: string): HTMLElement {
+		const header = list.createDiv("wb-group-header wb-tree-header");
+		header.setAttribute("role", "button");
+		header.setAttribute("tabindex", "0");
+		setIcon(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
+		header.createEl("span", { cls: "wb-group-title", text: title });
+		return header;
+	}
+
+	/**
+	 * Makes a hierarchical parent's label collapse (or expand) the parent's own card together with
+	 * its whole nested subtree - e.g. collapsing SOL hides everything in SOL, collapsing Earth hides
+	 * Earth, Las Luna and Colonia. Nested labels keep their own saved state, so re-opening SOL shows
+	 * Earth still collapsed if it was. The state is saved per note path in plugin data.
+	 */
+	private wireTreeCollapse(tab: WBTab, header: HTMLElement, parts: HTMLElement[], path: string) {
+		for (const p of parts) p.setAttribute("data-tree-owner", path);
+		const apply = (collapsed: boolean) => {
+			header.classList.toggle("is-collapsed", collapsed);
+			header.setAttribute("aria-expanded", String(!collapsed));
+			for (const p of parts) p.classList.toggle("wb-tree-hidden", collapsed);
+		};
+		apply(this.plugin.settings.collapsedParents.includes(path));
+
+		const setCollapsed = async (collapse: boolean) => {
+			apply(collapse);
+			const settings = this.plugin.settings;
+			if (settings.collapsedParents.includes(path) === collapse) return;
+			settings.collapsedParents = collapse
+				? [...settings.collapsedParents, path]
+				: settings.collapsedParents.filter((p) => p !== path);
+			await this.plugin.saveSettings();
+		};
+		this.treeExpanders.set(path, () => setCollapsed(false));
+
+		const toggle = () => {
+			// While searching, matching entries are shown open regardless; leave the saved state alone.
+			if (normalizeForSearch(this.searchQueries[tab]).trim()) return;
+			setCollapsed(!header.classList.contains("is-collapsed"));
+		};
+		header.onclick = toggle;
+		header.onkeydown = (e) => {
+			if (e.key === "Enter" || e.key === " ") {
+				e.preventDefault();
+				toggle();
+			}
+		};
 	}
 
 	/** The "No ... match" line; hidden until applySearch() finds nothing. */
@@ -1109,6 +1288,12 @@ class WorldBuilderView extends ItemView {
 				header.setAttribute("aria-expanded", "true");
 			}
 		}
+		// Hierarchical tabs: open every collapsed parent label the card sits under (or belongs to).
+		for (let el: HTMLElement | null = card; el && el !== pane.body; el = el.parentElement) {
+			if (!el.classList.contains("wb-tree-hidden")) continue;
+			const owner = el.getAttribute("data-tree-owner");
+			if (owner) void this.treeExpanders.get(owner)?.();
+		}
 
 		if (card.classList.contains("wb-filtered-out") && this.searchQueries[tab]) {
 			this.searchQueries[tab] = "";
@@ -1142,8 +1327,19 @@ class WorldBuilderView extends ItemView {
 
 		const cardAt = (t: EventTarget | null): HTMLElement | null =>
 			t instanceof HTMLElement ? t.closest<HTMLElement>(".wb-card") : null;
+		// A card's "unit": its tree label above it and its nested child group below it (hierarchical
+		// tabs), so a parent is always dragged together with its whole subtree.
+		const unitOf = (card: HTMLElement): HTMLElement[] => {
+			const parts: HTMLElement[] = [];
+			const prev = card.previousElementSibling;
+			if (prev instanceof HTMLElement && prev.classList.contains("wb-tree-header")) parts.push(prev);
+			parts.push(card);
+			const next = card.nextElementSibling;
+			if (next instanceof HTMLElement && next.classList.contains("wb-child-group")) parts.push(next);
+			return parts;
+		};
 		const clearMarks = () => {
-			list.querySelectorAll(":scope > .wb-card.wb-drop-before, :scope > .wb-card.wb-drop-after").forEach((el) =>
+			list.querySelectorAll(":scope > .wb-drop-before, :scope > .wb-drop-after").forEach((el) =>
 				el.classList.remove("wb-drop-before", "wb-drop-after")
 			);
 			dropTarget = null;
@@ -1182,7 +1378,8 @@ class WorldBuilderView extends ItemView {
 			const r = target.getBoundingClientRect();
 			dropTarget = target;
 			dropAfter = e.clientY >= r.top + r.height / 2;
-			target.classList.add(dropAfter ? "wb-drop-after" : "wb-drop-before");
+			const unit = unitOf(target);
+			(dropAfter ? unit[unit.length - 1]! : unit[0]!).classList.add(dropAfter ? "wb-drop-after" : "wb-drop-before");
 		});
 
 		list.addEventListener("dragleave", (e) => {
@@ -1195,7 +1392,13 @@ class WorldBuilderView extends ItemView {
 			e.stopPropagation();
 			const moving = dragged;
 			if (dropTarget && dropTarget !== moving) {
-				list.insertBefore(moving, dropAfter ? dropTarget.nextSibling : dropTarget);
+				const movingParts = unitOf(moving);
+				const targetParts = unitOf(dropTarget);
+				const ref = dropAfter ? targetParts[targetParts.length - 1]!.nextSibling : targetParts[0]!;
+				// Dropping right where the unit already sits leaves it in place.
+				if (!movingParts.includes(ref as HTMLElement)) {
+					for (const part of movingParts) list.insertBefore(part, ref);
+				}
 				const order = Array.from(list.querySelectorAll<HTMLElement>(":scope > .wb-card")).map(
 					(c) => c.getAttribute("data-path") ?? ""
 				);
@@ -1403,7 +1606,7 @@ class EmployerModal extends Modal {
 	plugin: WorldBuilderPlugin;
 	onDone: () => void;
 	data = {
-		name: "", alignment: "neutral", goals: "", enemies: "", allies: "", description: ""
+		name: "", type: "corporation", alignment: "neutral", goals: "", enemies: "", allies: "", description: ""
 	};
 
 	constructor(app: App, plugin: WorldBuilderPlugin, onDone: () => void) {
@@ -1419,6 +1622,11 @@ class EmployerModal extends Modal {
 
 		new Setting(contentEl).setName("Name").addText((t) => {
 			t.setPlaceholder("Employer name").onChange((v) => (this.data.name = v));
+		});
+		new Setting(contentEl).setName("Type").addDropdown((d) => {
+			EMPLOYER_TYPES.forEach(({ key, label }) => d.addOption(key, label));
+			d.setValue(this.data.type);
+			d.onChange((v) => (this.data.type = v));
 		});
 		new Setting(contentEl).setName("Alignment").addDropdown((d) => {
 			["lawful", "neutral", "chaotic"].forEach((o) =>
@@ -1454,6 +1662,7 @@ class EmployerModal extends Modal {
 		const lines = [
 			"---",
 			`name: "${this.data.name}"`,
+			`type: ${this.data.type}`,
 			`alignment: ${this.data.alignment}`,
 			`goals: "${this.data.goals.replace(/"/g, "'")}"`,
 			`entry_type: employer`,
@@ -1461,6 +1670,7 @@ class EmployerModal extends Modal {
 			"",
 			`# ${this.data.name}`,
 			"",
+			`**Type:** ${EMPLOYER_TYPES.find((t) => t.key === this.data.type)?.label ?? this.data.type}`,
 			`**Alignment:** ${this.data.alignment}`,
 		];
 		if (enemyLinks) lines.push(`**Enemies:** ${enemyLinks}`);
@@ -1717,6 +1927,8 @@ export default class WorldBuilderPlugin extends Plugin {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
 		this.settings.characterOrder = data?.characterOrder ?? {};
 		this.settings.collapsedEmployers = data?.collapsedEmployers ?? [];
+		this.settings.collapsedEmployerTypes = data?.collapsedEmployerTypes ?? [];
+		this.settings.collapsedParents = data?.collapsedParents ?? [];
 		this.settings.sectionOrder = data?.sectionOrder ?? {};
 	}
 	async saveSettings() {
