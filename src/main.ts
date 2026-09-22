@@ -126,6 +126,14 @@ function normalizeForSearch(s: string): string {
 	return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 
+/** "[[Name]]", "[[Name|Alias]]", or plain "Name" -> "Name" (trimmed). */
+function parseRefName(raw: string): string {
+	const trimmed = raw.trim();
+	const m = trimmed.match(/^\[\[([^\]]+)\]\]$/);
+	const inner = m ? m[1]! : trimmed;
+	return inner.split("|")[0]!.split("#")[0]!.trim();
+}
+
 /**
  * Everything a note "says", for searching: its frontmatter values (not the keys) plus its body,
  * with markup that isn't visible text removed (embeds, link targets, HTML tags such as the
@@ -166,6 +174,79 @@ const SEARCH_HINTS: Record<WBTab, { noun: string; tip: string }> = {
 	timeline: { noun: "timeline", tip: "Matches the title and the text of the note" },
 };
 
+/**
+ * Groups a flat list of notes into a parent/child tree using each note's "parent" frontmatter
+ * text, matched (case/accent-insensitively, tolerant of "[[Name]]" wiki-link syntax) against
+ * other notes' own names in the same list. A note whose parent text doesn't resolve to another
+ * note here - unset, misspelled, or pointing outside this section - is left as a root: nesting
+ * only happens where an actual parent/child relationship is detected. Any edge that would create
+ * a cycle (A parents B parents A) is dropped so the tree stays walkable.
+ */
+function buildParentTree(
+	entries: NoteEntry[],
+	getParentName: (fm: Record<string, string>) => string,
+	getOwnName: (fm: Record<string, string>) => string
+): { roots: NoteEntry[]; childrenOf: Map<string, NoteEntry[]> } {
+	const nameIndex = new Map<string, NoteEntry>();
+	for (const entry of entries) {
+		const key = normalizeForSearch(parseRefName(getOwnName(entry.fm) || ""));
+		if (key && !nameIndex.has(key)) nameIndex.set(key, entry);
+	}
+
+	const parentOf = new Map<string, NoteEntry>();
+	for (const entry of entries) {
+		const raw = parseRefName(getParentName(entry.fm) || "");
+		if (!raw) continue;
+		const parent = nameIndex.get(normalizeForSearch(raw));
+		if (parent && parent.file.path !== entry.file.path) parentOf.set(entry.file.path, parent);
+	}
+
+	// Drop any edge whose chain of parents loops back on itself, so the tree stays walkable.
+	const isAcyclic = (start: NoteEntry): boolean => {
+		const seen = new Set<string>();
+		let cur: NoteEntry | undefined = start;
+		while (cur) {
+			if (seen.has(cur.file.path)) return false;
+			seen.add(cur.file.path);
+			cur = parentOf.get(cur.file.path);
+		}
+		return true;
+	};
+	for (const entry of entries) {
+		if (parentOf.has(entry.file.path) && !isAcyclic(entry)) parentOf.delete(entry.file.path);
+	}
+
+	const childrenOf = new Map<string, NoteEntry[]>();
+	const roots: NoteEntry[] = [];
+	for (const entry of entries) {
+		const parent = parentOf.get(entry.file.path);
+		if (!parent) { roots.push(entry); continue; }
+		const list = childrenOf.get(parent.file.path);
+		if (list) list.push(entry); else childrenOf.set(parent.file.path, [entry]);
+	}
+	return { roots, childrenOf };
+}
+
+/**
+ * Merges a reordered sibling group back into a flat priority order without disturbing anything
+ * outside that group: every path in `groupPaths` is replaced, in its new order, at the position
+ * of the group's first surviving member; everything else keeps its relative order.
+ */
+function mergeGroupOrder(overall: string[], groupPaths: string[], newGroupOrder: string[]): string[] {
+	const groupSet = new Set(groupPaths);
+	const result: string[] = [];
+	let inserted = false;
+	for (const path of overall) {
+		if (groupSet.has(path)) {
+			if (!inserted) { result.push(...newGroupOrder); inserted = true; }
+		} else {
+			result.push(path);
+		}
+	}
+	if (!inserted) result.push(...newGroupOrder);
+	return result;
+}
+
 // ─── Sidebar View ─────────────────────────────────────────────────────────────
 
 const VIEW_TYPE = "world-builder-sidebar";
@@ -180,6 +261,8 @@ class WorldBuilderView extends ItemView {
 	private searchIndex = new WeakMap<HTMLElement, string>();
 	/** Every note currently drawn in the sidebar, keyed by path, so a wiki-link click can find its entry. */
 	private entryByPath = new Map<string, NoteEntry>();
+	/** Tabs whose lists nest child entries under their parent (see renderHierarchicalGroup). */
+	private readonly hierarchicalTabs = new Set<WBTab>(["locations"]);
 
 	// Rebuilt on every render(); let switchTab() and the nav buttons operate without closures.
 	private tabBarEl: HTMLElement | null = null;
@@ -343,7 +426,13 @@ class WorldBuilderView extends ItemView {
 				meta: `${fm.type ?? ""} ${fm.parent ? `· in ${fm.parent}` : ""}`.trim(),
 				badge: fm.type ?? "",
 			}),
-			{ thumbs: true, expandable: true }
+			{
+				thumbs: true,
+				expandable: true,
+				hierarchical: true,
+				getParentName: (fm) => fm.parent ?? "",
+				getOwnName: (fm) => fm.name ?? "",
+			}
 		);
 
 		await this.renderSection(
@@ -434,20 +523,47 @@ class WorldBuilderView extends ItemView {
 		};
 
 		let matches = 0;
-		body.querySelectorAll<HTMLElement>(".wb-group-header").forEach((header) => {
-			const list = header.nextElementSibling;
-			if (!list || !list.classList.contains("wb-list")) return;
-			const shown = filterList(list);
-			const hideGroup = searching && shown === 0;
-			header.classList.toggle("wb-filtered-out", hideGroup);
-			list.classList.toggle("wb-filtered-out", hideGroup);
-			matches += shown;
-		});
-		// Tabs without employer sections: plain lists
-		body.querySelectorAll<HTMLElement>(":scope > .wb-list").forEach((list) => {
-			if (list.previousElementSibling?.classList.contains("wb-group-header")) return;
-			matches += filterList(list);
-		});
+
+		if (this.hierarchicalTabs.has(tab)) {
+			// A card is kept visible if it matches directly, or if any of its (nested) descendants
+			// do, so a matching child's ancestors stay in view to give it context. Evaluated bottom
+			// up: a child group's own visibility is resolved before its parent card decides its own.
+			const evalGroup = (list: Element): boolean => {
+				let anyVisible = false;
+				list.querySelectorAll(":scope > .wb-card").forEach((el) => {
+					const card = el as HTMLElement;
+					const haystack = this.searchIndex.get(card) ?? "";
+					const ownMatch = terms.every((t) => haystack.includes(t));
+					if (ownMatch) matches++;
+					const childGroup = card.nextElementSibling;
+					const childList = childGroup?.classList.contains("wb-child-group")
+						? childGroup.querySelector<HTMLElement>(":scope > .wb-list")
+						: null;
+					const descendantMatch = childList ? evalGroup(childList) : false;
+					const show = ownMatch || descendantMatch;
+					card.classList.toggle("wb-filtered-out", searching && !show);
+					if (show) anyVisible = true;
+				});
+				return anyVisible;
+			};
+			const topList = body.querySelector<HTMLElement>(":scope > .wb-list");
+			if (topList) evalGroup(topList);
+		} else {
+			body.querySelectorAll<HTMLElement>(".wb-group-header").forEach((header) => {
+				const list = header.nextElementSibling;
+				if (!list || !list.classList.contains("wb-list")) return;
+				const shown = filterList(list);
+				const hideGroup = searching && shown === 0;
+				header.classList.toggle("wb-filtered-out", hideGroup);
+				list.classList.toggle("wb-filtered-out", hideGroup);
+				matches += shown;
+			});
+			// Tabs without employer sections: plain lists
+			body.querySelectorAll<HTMLElement>(":scope > .wb-list").forEach((list) => {
+				if (list.previousElementSibling?.classList.contains("wb-group-header")) return;
+				matches += filterList(list);
+			});
+		}
 
 		const none = body.querySelector<HTMLElement>(".wb-no-results");
 		if (none) {
@@ -499,6 +615,10 @@ class WorldBuilderView extends ItemView {
 			stackBadge?: boolean;
 			/** Clicking a card expands an in-sidebar, text-only preview instead of opening the note. */
 			expandable?: boolean;
+			/** Nest entries under their detected parent (see renderHierarchicalGroup); requires getParentName/getOwnName. */
+			hierarchical?: boolean;
+			getParentName?: (fm: Record<string, string>) => string;
+			getOwnName?: (fm: Record<string, string>) => string;
 		} = {}
 	) {
 		const container = pane.body;
@@ -548,6 +668,19 @@ class WorldBuilderView extends ItemView {
 			const entry: NoteEntry = { file, content, fm: readFrontmatter(content) };
 			entries.push(entry);
 			this.entryByPath.set(file.path, entry);
+		}
+
+		if (opts.hierarchical) {
+			const { roots, childrenOf } = buildParentTree(
+				entries,
+				opts.getParentName ?? (() => ""),
+				opts.getOwnName ?? ((fm) => fm.name ?? "")
+			);
+			this.renderHierarchicalGroup(
+				tab, container, roots, entries, childrenOf, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable
+			);
+			this.createNoResultsLine(container, label);
+			return;
 		}
 
 		if (!opts.employerGroups) {
@@ -640,6 +773,44 @@ class WorldBuilderView extends ItemView {
 			.map((entry, index) => ({ entry, index }))
 			.sort((a, b) => rank(a.entry.file.path) - rank(b.entry.file.path) || a.index - b.index)
 			.map(({ entry }) => entry);
+	}
+
+	/**
+	 * Draws one sibling group of a hierarchical (parent/child) tab - the roots, or one parent's
+	 * children - as its own `.wb-list`, then recurses into each entry's own children (if any)
+	 * as a further-indented sibling group nested right after that entry's card. Each group gets
+	 * its own enableReorder() call, so a card can only be dragged among its own siblings, and
+	 * indentation is pure left-side margin (`.wb-child-group` in styles.css) that shrinks the
+	 * nested group in from the left while its right edge stays flush with everything above it.
+	 */
+	private renderHierarchicalGroup(
+		tab: WBTab,
+		host: HTMLElement,
+		groupEntries: NoteEntry[],
+		allEntries: NoteEntry[],
+		childrenOf: Map<string, NoteEntry[]>,
+		getCard: CardFn,
+		thumbs: boolean,
+		stackBadge: boolean,
+		expandable: boolean
+	) {
+		const list = host.createDiv("wb-list");
+		const ordered = this.orderEntries(groupEntries, this.plugin.settings.sectionOrder[tab] ?? []);
+		for (const entry of ordered) {
+			this.renderCard(tab, list, entry, getCard, thumbs, stackBadge, expandable);
+			const kids = childrenOf.get(entry.file.path);
+			if (kids && kids.length) {
+				const childHost = list.createDiv("wb-child-group");
+				this.renderHierarchicalGroup(tab, childHost, kids, allEntries, childrenOf, getCard, thumbs, stackBadge, expandable);
+			}
+		}
+		this.enableReorder(list, async (order) => {
+			const settings = this.plugin.settings;
+			const baseline = this.orderEntries(allEntries, settings.sectionOrder[tab] ?? []).map((e) => e.file.path);
+			const groupPaths = ordered.map((e) => e.file.path);
+			settings.sectionOrder[tab] = mergeGroupOrder(baseline, groupPaths, order);
+			await this.plugin.saveSettings();
+		});
 	}
 
 	/** The "No ... match" line; hidden until applySearch() finds nothing. */
@@ -930,10 +1101,15 @@ class WorldBuilderView extends ItemView {
 	}
 
 	/**
-	 * Makes the cards in one list drag-sortable (an employer's character group, or a whole flat
-	 * tab like Locations or Lore). Each list only accepts cards that were picked up from that same
-	 * list, so entries can't be dragged between employers or between tabs. The new order is handed
-	 * to `onReorder` to persist to plugin data; notes themselves are never modified.
+	 * Makes the cards in one list drag-sortable (an employer's character group, a hierarchical
+	 * tab's parent or child group, or a whole flat tab like Lore). Each list only accepts cards
+	 * that were picked up from that same list, so entries can't be dragged between employers,
+	 * between a parent's children and its siblings, or between tabs. Every DOM query here is
+	 * scoped to this list's own direct children (`:scope > .wb-card`) so a hierarchical tab's
+	 * nested child-group lists - which live inside this list's DOM subtree - are never touched by
+	 * an ancestor list's bookkeeping, and every listener stops propagation so a drag started in a
+	 * nested list isn't also seen by the (ancestor) lists it's nested inside. The new order is
+	 * handed to `onReorder` to persist to plugin data; notes themselves are never modified.
 	 */
 	private enableReorder(list: HTMLElement, onReorder: (order: string[]) => Promise<void>) {
 		let dragged: HTMLElement | null = null;
@@ -943,19 +1119,20 @@ class WorldBuilderView extends ItemView {
 		const cardAt = (t: EventTarget | null): HTMLElement | null =>
 			t instanceof HTMLElement ? t.closest<HTMLElement>(".wb-card") : null;
 		const clearMarks = () => {
-			list.querySelectorAll(".wb-drop-before, .wb-drop-after").forEach((el) =>
+			list.querySelectorAll(":scope > .wb-card.wb-drop-before, :scope > .wb-card.wb-drop-after").forEach((el) =>
 				el.classList.remove("wb-drop-before", "wb-drop-after")
 			);
 			dropTarget = null;
 		};
 
-		list.querySelectorAll<HTMLElement>(".wb-card").forEach((card) =>
+		list.querySelectorAll<HTMLElement>(":scope > .wb-card").forEach((card) =>
 			card.setAttribute("draggable", "true")
 		);
 
 		list.addEventListener("dragstart", (e) => {
 			const card = cardAt(e.target);
-			if (!card || !e.dataTransfer) return;
+			if (!card || card.parentElement !== list || !e.dataTransfer) return;
+			e.stopPropagation(); // keep an ancestor (hierarchical) list from also seeing this drag
 			dragged = card;
 			e.dataTransfer.effectAllowed = "move";
 			// Custom type only, so dropping onto a note or editor doesn't paste anything.
@@ -970,11 +1147,12 @@ class WorldBuilderView extends ItemView {
 		});
 
 		list.addEventListener("dragover", (e) => {
-			if (!dragged) return; // not picked up from this employer's list: not a valid drop
+			if (!dragged) return; // not picked up from this list: not a valid drop
 			e.preventDefault();
+			e.stopPropagation();
 			if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
 			const target = cardAt(e.target);
-			if (!target) return; // in a gap between cards: keep the last indicator
+			if (!target || target.parentElement !== list) return; // in a gap, or over a nested child group: keep the last indicator
 			clearMarks();
 			if (target === dragged) return;
 			const r = target.getBoundingClientRect();
@@ -990,10 +1168,11 @@ class WorldBuilderView extends ItemView {
 		list.addEventListener("drop", async (e) => {
 			if (!dragged) return;
 			e.preventDefault();
+			e.stopPropagation();
 			const moving = dragged;
 			if (dropTarget && dropTarget !== moving) {
 				list.insertBefore(moving, dropAfter ? dropTarget.nextSibling : dropTarget);
-				const order = Array.from(list.querySelectorAll<HTMLElement>(".wb-card")).map(
+				const order = Array.from(list.querySelectorAll<HTMLElement>(":scope > .wb-card")).map(
 					(c) => c.getAttribute("data-path") ?? ""
 				);
 				await onReorder(order);

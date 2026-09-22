@@ -86,6 +86,12 @@ function labeledLine(pairs) {
 function normalizeForSearch(s) {
   return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
+function parseRefName(raw) {
+  const trimmed = raw.trim();
+  const m = trimmed.match(/^\[\[([^\]]+)\]\]$/);
+  const inner = m ? m[1] : trimmed;
+  return inner.split("|")[0].split("#")[0].trim();
+}
 function documentSearchText(content, fm) {
   const body = stripFrontmatterBlock(content).replace(/!\[\[[^\]]*\]\]/g, " ").replace(/!\[[^\]]*\]\([^)]*\)/g, " ").replace(/\[\[[^\]|]*\|([^\]]*)\]\]/g, "$1").replace(/\[\[([^\]]*)\]\]/g, "$1").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/<[^>]+>/g, " ");
   const values = Object.entries(fm).filter(([key]) => key !== "entry_type").map(([, value]) => value);
@@ -98,6 +104,63 @@ var SEARCH_HINTS = {
   lore: { noun: "lore", tip: "Matches the title and the text of the note" },
   timeline: { noun: "timeline", tip: "Matches the title and the text of the note" }
 };
+function buildParentTree(entries, getParentName, getOwnName) {
+  const nameIndex = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    const key = normalizeForSearch(parseRefName(getOwnName(entry.fm) || ""));
+    if (key && !nameIndex.has(key)) nameIndex.set(key, entry);
+  }
+  const parentOf = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    const raw = parseRefName(getParentName(entry.fm) || "");
+    if (!raw) continue;
+    const parent = nameIndex.get(normalizeForSearch(raw));
+    if (parent && parent.file.path !== entry.file.path) parentOf.set(entry.file.path, parent);
+  }
+  const isAcyclic = (start) => {
+    const seen = /* @__PURE__ */ new Set();
+    let cur = start;
+    while (cur) {
+      if (seen.has(cur.file.path)) return false;
+      seen.add(cur.file.path);
+      cur = parentOf.get(cur.file.path);
+    }
+    return true;
+  };
+  for (const entry of entries) {
+    if (parentOf.has(entry.file.path) && !isAcyclic(entry)) parentOf.delete(entry.file.path);
+  }
+  const childrenOf = /* @__PURE__ */ new Map();
+  const roots = [];
+  for (const entry of entries) {
+    const parent = parentOf.get(entry.file.path);
+    if (!parent) {
+      roots.push(entry);
+      continue;
+    }
+    const list = childrenOf.get(parent.file.path);
+    if (list) list.push(entry);
+    else childrenOf.set(parent.file.path, [entry]);
+  }
+  return { roots, childrenOf };
+}
+function mergeGroupOrder(overall, groupPaths, newGroupOrder) {
+  const groupSet = new Set(groupPaths);
+  const result = [];
+  let inserted = false;
+  for (const path of overall) {
+    if (groupSet.has(path)) {
+      if (!inserted) {
+        result.push(...newGroupOrder);
+        inserted = true;
+      }
+    } else {
+      result.push(path);
+    }
+  }
+  if (!inserted) result.push(...newGroupOrder);
+  return result;
+}
 var VIEW_TYPE = "world-builder-sidebar";
 var WorldBuilderView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
@@ -110,6 +173,8 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     this.searchIndex = /* @__PURE__ */ new WeakMap();
     /** Every note currently drawn in the sidebar, keyed by path, so a wiki-link click can find its entry. */
     this.entryByPath = /* @__PURE__ */ new Map();
+    /** Tabs whose lists nest child entries under their parent (see renderHierarchicalGroup). */
+    this.hierarchicalTabs = /* @__PURE__ */ new Set(["locations"]);
     // Rebuilt on every render(); let switchTab() and the nav buttons operate without closures.
     this.tabBarEl = null;
     this.tabContents = {};
@@ -269,7 +334,19 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
           badge: (_c = fm.type) != null ? _c : ""
         };
       },
-      { thumbs: true, expandable: true }
+      {
+        thumbs: true,
+        expandable: true,
+        hierarchical: true,
+        getParentName: (fm) => {
+          var _a2;
+          return (_a2 = fm.parent) != null ? _a2 : "";
+        },
+        getOwnName: (fm) => {
+          var _a2;
+          return (_a2 = fm.name) != null ? _a2 : "";
+        }
+      }
     );
     await this.renderSection(
       "employers",
@@ -359,20 +436,42 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       return shown;
     };
     let matches = 0;
-    body.querySelectorAll(".wb-group-header").forEach((header) => {
-      const list = header.nextElementSibling;
-      if (!list || !list.classList.contains("wb-list")) return;
-      const shown = filterList(list);
-      const hideGroup = searching && shown === 0;
-      header.classList.toggle("wb-filtered-out", hideGroup);
-      list.classList.toggle("wb-filtered-out", hideGroup);
-      matches += shown;
-    });
-    body.querySelectorAll(":scope > .wb-list").forEach((list) => {
-      var _a2;
-      if ((_a2 = list.previousElementSibling) == null ? void 0 : _a2.classList.contains("wb-group-header")) return;
-      matches += filterList(list);
-    });
+    if (this.hierarchicalTabs.has(tab)) {
+      const evalGroup = (list) => {
+        let anyVisible = false;
+        list.querySelectorAll(":scope > .wb-card").forEach((el) => {
+          var _a2;
+          const card = el;
+          const haystack = (_a2 = this.searchIndex.get(card)) != null ? _a2 : "";
+          const ownMatch = terms.every((t) => haystack.includes(t));
+          if (ownMatch) matches++;
+          const childGroup = card.nextElementSibling;
+          const childList = (childGroup == null ? void 0 : childGroup.classList.contains("wb-child-group")) ? childGroup.querySelector(":scope > .wb-list") : null;
+          const descendantMatch = childList ? evalGroup(childList) : false;
+          const show = ownMatch || descendantMatch;
+          card.classList.toggle("wb-filtered-out", searching && !show);
+          if (show) anyVisible = true;
+        });
+        return anyVisible;
+      };
+      const topList = body.querySelector(":scope > .wb-list");
+      if (topList) evalGroup(topList);
+    } else {
+      body.querySelectorAll(".wb-group-header").forEach((header) => {
+        const list = header.nextElementSibling;
+        if (!list || !list.classList.contains("wb-list")) return;
+        const shown = filterList(list);
+        const hideGroup = searching && shown === 0;
+        header.classList.toggle("wb-filtered-out", hideGroup);
+        list.classList.toggle("wb-filtered-out", hideGroup);
+        matches += shown;
+      });
+      body.querySelectorAll(":scope > .wb-list").forEach((list) => {
+        var _a2;
+        if ((_a2 = list.previousElementSibling) == null ? void 0 : _a2.classList.contains("wb-group-header")) return;
+        matches += filterList(list);
+      });
+    }
     const none = body.querySelector(".wb-no-results");
     if (none) {
       none.textContent = `No ${(_a = none.getAttribute("data-noun")) != null ? _a : "entries"} match \u201C${query.trim()}\u201D.`;
@@ -408,7 +507,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     return null;
   }
   async renderSection(tab, pane, folderPath, label, onCreate, getCard, opts = {}) {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e, _f;
     const container = pane.body;
     const hdr = pane.head.createDiv("wb-section-header");
     const titleGroup = hdr.createDiv("wb-section-title");
@@ -453,9 +552,32 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       entries.push(entry);
       this.entryByPath.set(file.path, entry);
     }
+    if (opts.hierarchical) {
+      const { roots, childrenOf } = buildParentTree(
+        entries,
+        (_b = opts.getParentName) != null ? _b : (() => ""),
+        (_c = opts.getOwnName) != null ? _c : ((fm) => {
+          var _a2;
+          return (_a2 = fm.name) != null ? _a2 : "";
+        })
+      );
+      this.renderHierarchicalGroup(
+        tab,
+        container,
+        roots,
+        entries,
+        childrenOf,
+        getCard,
+        !!opts.thumbs,
+        !!opts.stackBadge,
+        !!opts.expandable
+      );
+      this.createNoResultsLine(container, label);
+      return;
+    }
     if (!opts.employerGroups) {
       const list = container.createDiv("wb-list");
-      const ordered = this.orderEntries(entries, (_b = this.plugin.settings.sectionOrder[tab]) != null ? _b : []);
+      const ordered = this.orderEntries(entries, (_d = this.plugin.settings.sectionOrder[tab]) != null ? _d : []);
       for (const entry of ordered) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
       this.enableReorder(list, async (order) => {
         this.plugin.settings.sectionOrder[tab] = order;
@@ -466,7 +588,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     }
     const groups = /* @__PURE__ */ new Map();
     for (const entry of entries) {
-      const employer = ((_c = entry.fm.employer) != null ? _c : "").trim();
+      const employer = ((_e = entry.fm.employer) != null ? _e : "").trim();
       const key = employer.toLowerCase();
       let group = groups.get(key);
       if (!group) {
@@ -506,7 +628,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
           toggleCollapsed();
         }
       };
-      const items = this.orderEntries(group.items, (_d = this.plugin.settings.characterOrder[key]) != null ? _d : []);
+      const items = this.orderEntries(group.items, (_f = this.plugin.settings.characterOrder[key]) != null ? _f : []);
       for (const entry of items) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
       this.enableReorder(list, async (order) => {
         this.plugin.settings.characterOrder[key] = order;
@@ -525,6 +647,35 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       return i === -1 ? saved.length : i;
     };
     return entries.map((entry, index) => ({ entry, index })).sort((a, b) => rank(a.entry.file.path) - rank(b.entry.file.path) || a.index - b.index).map(({ entry }) => entry);
+  }
+  /**
+   * Draws one sibling group of a hierarchical (parent/child) tab - the roots, or one parent's
+   * children - as its own `.wb-list`, then recurses into each entry's own children (if any)
+   * as a further-indented sibling group nested right after that entry's card. Each group gets
+   * its own enableReorder() call, so a card can only be dragged among its own siblings, and
+   * indentation is pure left-side margin (`.wb-child-group` in styles.css) that shrinks the
+   * nested group in from the left while its right edge stays flush with everything above it.
+   */
+  renderHierarchicalGroup(tab, host, groupEntries, allEntries, childrenOf, getCard, thumbs, stackBadge, expandable) {
+    var _a;
+    const list = host.createDiv("wb-list");
+    const ordered = this.orderEntries(groupEntries, (_a = this.plugin.settings.sectionOrder[tab]) != null ? _a : []);
+    for (const entry of ordered) {
+      this.renderCard(tab, list, entry, getCard, thumbs, stackBadge, expandable);
+      const kids = childrenOf.get(entry.file.path);
+      if (kids && kids.length) {
+        const childHost = list.createDiv("wb-child-group");
+        this.renderHierarchicalGroup(tab, childHost, kids, allEntries, childrenOf, getCard, thumbs, stackBadge, expandable);
+      }
+    }
+    this.enableReorder(list, async (order) => {
+      var _a2;
+      const settings = this.plugin.settings;
+      const baseline = this.orderEntries(allEntries, (_a2 = settings.sectionOrder[tab]) != null ? _a2 : []).map((e) => e.file.path);
+      const groupPaths = ordered.map((e) => e.file.path);
+      settings.sectionOrder[tab] = mergeGroupOrder(baseline, groupPaths, order);
+      await this.plugin.saveSettings();
+    });
   }
   /** The "No ... match" line; hidden until applySearch() finds nothing. */
   createNoResultsLine(container, label) {
@@ -769,10 +920,15 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     card.scrollIntoView({ block: "center", behavior: "smooth" });
   }
   /**
-   * Makes the cards in one list drag-sortable (an employer's character group, or a whole flat
-   * tab like Locations or Lore). Each list only accepts cards that were picked up from that same
-   * list, so entries can't be dragged between employers or between tabs. The new order is handed
-   * to `onReorder` to persist to plugin data; notes themselves are never modified.
+   * Makes the cards in one list drag-sortable (an employer's character group, a hierarchical
+   * tab's parent or child group, or a whole flat tab like Lore). Each list only accepts cards
+   * that were picked up from that same list, so entries can't be dragged between employers,
+   * between a parent's children and its siblings, or between tabs. Every DOM query here is
+   * scoped to this list's own direct children (`:scope > .wb-card`) so a hierarchical tab's
+   * nested child-group lists - which live inside this list's DOM subtree - are never touched by
+   * an ancestor list's bookkeeping, and every listener stops propagation so a drag started in a
+   * nested list isn't also seen by the (ancestor) lists it's nested inside. The new order is
+   * handed to `onReorder` to persist to plugin data; notes themselves are never modified.
    */
   enableReorder(list, onReorder) {
     let dragged = null;
@@ -780,18 +936,19 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     let dropAfter = false;
     const cardAt = (t) => t instanceof HTMLElement ? t.closest(".wb-card") : null;
     const clearMarks = () => {
-      list.querySelectorAll(".wb-drop-before, .wb-drop-after").forEach(
+      list.querySelectorAll(":scope > .wb-card.wb-drop-before, :scope > .wb-card.wb-drop-after").forEach(
         (el) => el.classList.remove("wb-drop-before", "wb-drop-after")
       );
       dropTarget = null;
     };
-    list.querySelectorAll(".wb-card").forEach(
+    list.querySelectorAll(":scope > .wb-card").forEach(
       (card) => card.setAttribute("draggable", "true")
     );
     list.addEventListener("dragstart", (e) => {
       var _a;
       const card = cardAt(e.target);
-      if (!card || !e.dataTransfer) return;
+      if (!card || card.parentElement !== list || !e.dataTransfer) return;
+      e.stopPropagation();
       dragged = card;
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("application/x-wb-card", (_a = card.getAttribute("data-path")) != null ? _a : "");
@@ -805,9 +962,10 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     list.addEventListener("dragover", (e) => {
       if (!dragged) return;
       e.preventDefault();
+      e.stopPropagation();
       if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
       const target = cardAt(e.target);
-      if (!target) return;
+      if (!target || target.parentElement !== list) return;
       clearMarks();
       if (target === dragged) return;
       const r = target.getBoundingClientRect();
@@ -821,10 +979,11 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     list.addEventListener("drop", async (e) => {
       if (!dragged) return;
       e.preventDefault();
+      e.stopPropagation();
       const moving = dragged;
       if (dropTarget && dropTarget !== moving) {
         list.insertBefore(moving, dropAfter ? dropTarget.nextSibling : dropTarget);
-        const order = Array.from(list.querySelectorAll(".wb-card")).map(
+        const order = Array.from(list.querySelectorAll(":scope > .wb-card")).map(
           (c) => {
             var _a;
             return (_a = c.getAttribute("data-path")) != null ? _a : "";

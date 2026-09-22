@@ -128,7 +128,10 @@
 	padding: 10px 12px;
 	border-radius: 6px;
 	background: var(--background-secondary);
-	border: 1px solid var(--background-modifier-border);
+	/* --background-modifier-border-hover: same role as the default border token, just a lighter/more
+	   visible variant the theme already defines - used instead of --background-modifier-border so
+	   every entry card (every tab) reads a bit brighter without hardcoding a color of our own. */
+	border: 1px solid var(--background-modifier-border-hover);
 	cursor: pointer;
 }
 .wb-card:hover { border-color: var(--interactive-accent); }
@@ -193,6 +196,33 @@
 .wb-group-chevron svg { width: 14px; height: 14px; }
 .wb-group-header.is-collapsed .wb-group-chevron { transform: rotate(-90deg); }
 .wb-list.is-collapsed { display: none; }
+
+/*
+ * Hierarchical tabs (Locations): a parent's children render as their own nested .wb-list, wrapped
+ * in .wb-child-group right after the parent's card. margin-left (not width/indent) is what shifts
+ * it in from the left - the parent .wb-list is a flex column with the default align-items:stretch,
+ * so the child group's box still stretches to the container's width minus that margin, which keeps
+ * its right edge flush with every card above it instead of extending past the section border.
+ * Nesting compounds naturally: a grandchild group's own margin-left is relative to its already-
+ * indented parent group, so multi-level trees (SOL -> Earth -> Las Luna/Colonia) indent further
+ * with each level with no extra bookkeeping.
+ *
+ * border-left draws a faint guide line down the indented column, marking which entries belong to
+ * the same parent. It's a border rather than a separately-sized element on purpose: a border's
+ * height always matches its element's own box height, so when a card inside (at any depth) opens
+ * its expanded preview and grows taller, every ancestor guide line stretches to match automatically
+ * - nothing needs to recalculate it. Deeper levels nest their own .wb-child-group further right, so
+ * an ancestor's line runs the full height of everything under it while a deeper line only spans its
+ * own smaller subtree, giving each level a visually distinct line (a "staircase", like a file tree).
+ * A flat rgba() (not a theme CSS variable or color-mix()) on purpose: it's the one value every
+ * Obsidian build/theme renders the same way, so there's nothing here that can silently fail to
+ * apply. 1px + 0.45 alpha is a visible but still clearly translucent hint, not a hard rule.
+ */
+.wb-child-group {
+	margin-left: 8px;
+	padding-left: 11px;
+	border-left: 1px solid rgba(150, 150, 150, 0.45);
+}
 
 .wb-list .wb-card[draggable="true"] { cursor: grab; }
 .wb-list .wb-card[draggable="true"]:active { cursor: grabbing; }
