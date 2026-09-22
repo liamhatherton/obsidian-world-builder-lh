@@ -20,8 +20,15 @@ interface WorldBuilderSettings {
 	characterOrder: Record<string, string[]>;
 	/** Lower-cased employer names whose character sub-section is collapsed. */
 	collapsedEmployers: string[];
+	/** Custom manual order for the flat (non-Characters) tabs, keyed by tab id -> ordered note paths. */
+	sectionOrder: Partial<Record<WBTab, string[]>>;
 }
-const DEFAULT_SETTINGS: WorldBuilderSettings = { worldFolder: "World", characterOrder: {}, collapsedEmployers: [] };
+const DEFAULT_SETTINGS: WorldBuilderSettings = {
+	worldFolder: "World",
+	characterOrder: {},
+	collapsedEmployers: [],
+	sectionOrder: {},
+};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -545,7 +552,12 @@ class WorldBuilderView extends ItemView {
 
 		if (!opts.employerGroups) {
 			const list = container.createDiv("wb-list");
-			for (const entry of entries) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
+			const ordered = this.orderEntries(entries, this.plugin.settings.sectionOrder[tab] ?? []);
+			for (const entry of ordered) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
+			this.enableReorder(list, async (order) => {
+				this.plugin.settings.sectionOrder[tab] = order;
+				await this.plugin.saveSettings();
+			});
 			this.createNoResultsLine(container, label);
 			return;
 		}
@@ -603,21 +615,31 @@ class WorldBuilderView extends ItemView {
 			};
 
 			// Saved order first; anything not yet ordered keeps its default position after them.
-			const saved = this.plugin.settings.characterOrder[key] ?? [];
-			const rank = (path: string) => {
-				const i = saved.indexOf(path);
-				return i === -1 ? saved.length : i;
-			};
-			const items = group.items
-				.map((entry, index) => ({ entry, index }))
-				.sort((a, b) => rank(a.entry.file.path) - rank(b.entry.file.path) || a.index - b.index)
-				.map(({ entry }) => entry);
+			const items = this.orderEntries(group.items, this.plugin.settings.characterOrder[key] ?? []);
 
 			for (const entry of items) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
-			this.enableReorder(list, key);
+			this.enableReorder(list, async (order) => {
+				this.plugin.settings.characterOrder[key] = order;
+				await this.plugin.saveSettings();
+			});
 		}
 
 		this.createNoResultsLine(container, label);
+	}
+
+	/**
+	 * Applies a saved manual order (a list of note paths, earliest first) to a set of entries.
+	 * Anything not yet present in `saved` keeps its original relative position after the ordered ones.
+	 */
+	private orderEntries(entries: NoteEntry[], saved: string[]): NoteEntry[] {
+		const rank = (path: string) => {
+			const i = saved.indexOf(path);
+			return i === -1 ? saved.length : i;
+		};
+		return entries
+			.map((entry, index) => ({ entry, index }))
+			.sort((a, b) => rank(a.entry.file.path) - rank(b.entry.file.path) || a.index - b.index)
+			.map(({ entry }) => entry);
 	}
 
 	/** The "No ... match" line; hidden until applySearch() finds nothing. */
@@ -908,11 +930,12 @@ class WorldBuilderView extends ItemView {
 	}
 
 	/**
-	 * Makes the cards in one employer's list drag-sortable. Each list only accepts cards
-	 * that were picked up from that same list, so characters can't be moved between employers.
-	 * The new order is saved to plugin data (notes themselves are never modified).
+	 * Makes the cards in one list drag-sortable (an employer's character group, or a whole flat
+	 * tab like Locations or Lore). Each list only accepts cards that were picked up from that same
+	 * list, so entries can't be dragged between employers or between tabs. The new order is handed
+	 * to `onReorder` to persist to plugin data; notes themselves are never modified.
 	 */
-	private enableReorder(list: HTMLElement, groupKey: string) {
+	private enableReorder(list: HTMLElement, onReorder: (order: string[]) => Promise<void>) {
 		let dragged: HTMLElement | null = null;
 		let dropTarget: HTMLElement | null = null;
 		let dropAfter = false;
@@ -936,7 +959,7 @@ class WorldBuilderView extends ItemView {
 			dragged = card;
 			e.dataTransfer.effectAllowed = "move";
 			// Custom type only, so dropping onto a note or editor doesn't paste anything.
-			e.dataTransfer.setData("application/x-wb-character", card.getAttribute("data-path") ?? "");
+			e.dataTransfer.setData("application/x-wb-card", card.getAttribute("data-path") ?? "");
 			window.setTimeout(() => card.classList.add("wb-dragging"), 0);
 		});
 
@@ -970,10 +993,10 @@ class WorldBuilderView extends ItemView {
 			const moving = dragged;
 			if (dropTarget && dropTarget !== moving) {
 				list.insertBefore(moving, dropAfter ? dropTarget.nextSibling : dropTarget);
-				this.plugin.settings.characterOrder[groupKey] = Array.from(
-					list.querySelectorAll<HTMLElement>(".wb-card")
-				).map((c) => c.getAttribute("data-path") ?? "");
-				await this.plugin.saveSettings();
+				const order = Array.from(list.querySelectorAll<HTMLElement>(".wb-card")).map(
+					(c) => c.getAttribute("data-path") ?? ""
+				);
+				await onReorder(order);
 			}
 			clearMarks();
 		});
@@ -1457,6 +1480,11 @@ export default class WorldBuilderPlugin extends Plugin {
 					const i = order.indexOf(oldPath);
 					if (i !== -1) { order[i] = file.path; changed = true; }
 				}
+				for (const order of Object.values(this.settings.sectionOrder)) {
+					if (!order) continue;
+					const i = order.indexOf(oldPath);
+					if (i !== -1) { order[i] = file.path; changed = true; }
+				}
 				if (changed) await this.saveSettings();
 			})
 		);
@@ -1486,6 +1514,7 @@ export default class WorldBuilderPlugin extends Plugin {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
 		this.settings.characterOrder = data?.characterOrder ?? {};
 		this.settings.collapsedEmployers = data?.collapsedEmployers ?? [];
+		this.settings.sectionOrder = data?.sectionOrder ?? {};
 	}
 	async saveSettings() {
 		await this.saveData(this.settings);

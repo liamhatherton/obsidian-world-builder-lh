@@ -23,7 +23,12 @@ __export(main_exports, {
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
-var DEFAULT_SETTINGS = { worldFolder: "World", characterOrder: {}, collapsedEmployers: [] };
+var DEFAULT_SETTINGS = {
+  worldFolder: "World",
+  characterOrder: {},
+  collapsedEmployers: [],
+  sectionOrder: {}
+};
 function slugify(s) {
   return s.replace(/[/\\:*?"<>|#^[\]]/g, "-").trim();
 }
@@ -403,7 +408,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     return null;
   }
   async renderSection(tab, pane, folderPath, label, onCreate, getCard, opts = {}) {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     const container = pane.body;
     const hdr = pane.head.createDiv("wb-section-header");
     const titleGroup = hdr.createDiv("wb-section-title");
@@ -450,13 +455,18 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     }
     if (!opts.employerGroups) {
       const list = container.createDiv("wb-list");
-      for (const entry of entries) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
+      const ordered = this.orderEntries(entries, (_b = this.plugin.settings.sectionOrder[tab]) != null ? _b : []);
+      for (const entry of ordered) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
+      this.enableReorder(list, async (order) => {
+        this.plugin.settings.sectionOrder[tab] = order;
+        await this.plugin.saveSettings();
+      });
       this.createNoResultsLine(container, label);
       return;
     }
     const groups = /* @__PURE__ */ new Map();
     for (const entry of entries) {
-      const employer = ((_b = entry.fm.employer) != null ? _b : "").trim();
+      const employer = ((_c = entry.fm.employer) != null ? _c : "").trim();
       const key = employer.toLowerCase();
       let group = groups.get(key);
       if (!group) {
@@ -496,16 +506,25 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
           toggleCollapsed();
         }
       };
-      const saved = (_c = this.plugin.settings.characterOrder[key]) != null ? _c : [];
-      const rank = (path) => {
-        const i = saved.indexOf(path);
-        return i === -1 ? saved.length : i;
-      };
-      const items = group.items.map((entry, index) => ({ entry, index })).sort((a, b) => rank(a.entry.file.path) - rank(b.entry.file.path) || a.index - b.index).map(({ entry }) => entry);
+      const items = this.orderEntries(group.items, (_d = this.plugin.settings.characterOrder[key]) != null ? _d : []);
       for (const entry of items) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
-      this.enableReorder(list, key);
+      this.enableReorder(list, async (order) => {
+        this.plugin.settings.characterOrder[key] = order;
+        await this.plugin.saveSettings();
+      });
     }
     this.createNoResultsLine(container, label);
+  }
+  /**
+   * Applies a saved manual order (a list of note paths, earliest first) to a set of entries.
+   * Anything not yet present in `saved` keeps its original relative position after the ordered ones.
+   */
+  orderEntries(entries, saved) {
+    const rank = (path) => {
+      const i = saved.indexOf(path);
+      return i === -1 ? saved.length : i;
+    };
+    return entries.map((entry, index) => ({ entry, index })).sort((a, b) => rank(a.entry.file.path) - rank(b.entry.file.path) || a.index - b.index).map(({ entry }) => entry);
   }
   /** The "No ... match" line; hidden until applySearch() finds nothing. */
   createNoResultsLine(container, label) {
@@ -750,11 +769,12 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     card.scrollIntoView({ block: "center", behavior: "smooth" });
   }
   /**
-   * Makes the cards in one employer's list drag-sortable. Each list only accepts cards
-   * that were picked up from that same list, so characters can't be moved between employers.
-   * The new order is saved to plugin data (notes themselves are never modified).
+   * Makes the cards in one list drag-sortable (an employer's character group, or a whole flat
+   * tab like Locations or Lore). Each list only accepts cards that were picked up from that same
+   * list, so entries can't be dragged between employers or between tabs. The new order is handed
+   * to `onReorder` to persist to plugin data; notes themselves are never modified.
    */
-  enableReorder(list, groupKey) {
+  enableReorder(list, onReorder) {
     let dragged = null;
     let dropTarget = null;
     let dropAfter = false;
@@ -774,7 +794,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       if (!card || !e.dataTransfer) return;
       dragged = card;
       e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("application/x-wb-character", (_a = card.getAttribute("data-path")) != null ? _a : "");
+      e.dataTransfer.setData("application/x-wb-card", (_a = card.getAttribute("data-path")) != null ? _a : "");
       window.setTimeout(() => card.classList.add("wb-dragging"), 0);
     });
     list.addEventListener("dragend", () => {
@@ -804,13 +824,13 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       const moving = dragged;
       if (dropTarget && dropTarget !== moving) {
         list.insertBefore(moving, dropAfter ? dropTarget.nextSibling : dropTarget);
-        this.plugin.settings.characterOrder[groupKey] = Array.from(
-          list.querySelectorAll(".wb-card")
-        ).map((c) => {
-          var _a;
-          return (_a = c.getAttribute("data-path")) != null ? _a : "";
-        });
-        await this.plugin.saveSettings();
+        const order = Array.from(list.querySelectorAll(".wb-card")).map(
+          (c) => {
+            var _a;
+            return (_a = c.getAttribute("data-path")) != null ? _a : "";
+          }
+        );
+        await onReorder(order);
       }
       clearMarks();
     });
@@ -1270,6 +1290,14 @@ var WorldBuilderPlugin = class extends import_obsidian.Plugin {
             changed = true;
           }
         }
+        for (const order of Object.values(this.settings.sectionOrder)) {
+          if (!order) continue;
+          const i = order.indexOf(oldPath);
+          if (i !== -1) {
+            order[i] = file.path;
+            changed = true;
+          }
+        }
         if (changed) await this.saveSettings();
       })
     );
@@ -1292,11 +1320,12 @@ var WorldBuilderPlugin = class extends import_obsidian.Plugin {
     }
   }
   async loadSettings() {
-    var _a, _b;
+    var _a, _b, _c;
     const data = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
     this.settings.characterOrder = (_a = data == null ? void 0 : data.characterOrder) != null ? _a : {};
     this.settings.collapsedEmployers = (_b = data == null ? void 0 : data.collapsedEmployers) != null ? _b : [];
+    this.settings.sectionOrder = (_c = data == null ? void 0 : data.sectionOrder) != null ? _c : {};
   }
   async saveSettings() {
     await this.saveData(this.settings);
