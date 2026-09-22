@@ -27,6 +27,24 @@ var DEFAULT_SETTINGS = { worldFolder: "World", characterOrder: {}, collapsedEmpl
 function slugify(s) {
   return s.replace(/[/\\:*?"<>|#^[\]]/g, "-").trim();
 }
+var IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
+function stripFrontmatterBlock(content) {
+  return content.replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "");
+}
+function stripLeadingHeading(markdown) {
+  var _a;
+  const lines = markdown.replace(/^\s+/, "").split("\n");
+  if (!/^#\s+\S/.test((_a = lines[0]) != null ? _a : "")) return markdown;
+  lines.shift();
+  while (lines[0] === "") lines.shift();
+  return lines.join("\n");
+}
+function stripGraphics(markdown) {
+  return markdown.replace(/!\[\[([^\]]+)\]\]/g, (match, inner) => {
+    const target = inner.split("|")[0].split("#")[0].trim();
+    return IMG_EXT.test(target) ? "" : match;
+  }).replace(/!\[[^\]]*\]\((?:<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\)/g, "").replace(/<img\b[^>]*\/?>/gi, "");
+}
 async function ensureFolder(app, path) {
   if (!app.vault.getAbstractFileByPath(path)) {
     await app.vault.createFolder(path);
@@ -64,7 +82,7 @@ function normalizeForSearch(s) {
   return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 function documentSearchText(content, fm) {
-  const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "").replace(/!\[\[[^\]]*\]\]/g, " ").replace(/!\[[^\]]*\]\([^)]*\)/g, " ").replace(/\[\[[^\]|]*\|([^\]]*)\]\]/g, "$1").replace(/\[\[([^\]]*)\]\]/g, "$1").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/<[^>]+>/g, " ");
+  const body = stripFrontmatterBlock(content).replace(/!\[\[[^\]]*\]\]/g, " ").replace(/!\[[^\]]*\]\([^)]*\)/g, " ").replace(/\[\[[^\]|]*\|([^\]]*)\]\]/g, "$1").replace(/\[\[([^\]]*)\]\]/g, "$1").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/<[^>]+>/g, " ");
   const values = Object.entries(fm).filter(([key]) => key !== "entry_type").map(([, value]) => value);
   return [...values, body].join(" ");
 }
@@ -214,7 +232,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
           search: [fm.name, fm.employer, fm.ship, fm.home].filter(Boolean).join(" ")
         };
       },
-      { thumbs: true, employerGroups: true, stackBadge: true }
+      { thumbs: true, employerGroups: true, stackBadge: true, expandable: true }
     );
     await this.renderSection(
       contents.locations,
@@ -229,7 +247,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
           badge: (_c = fm.type) != null ? _c : ""
         };
       },
-      { thumbs: true }
+      { thumbs: true, expandable: true }
     );
     await this.renderSection(
       contents.employers,
@@ -244,7 +262,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
           badge: (_c = fm.alignment) != null ? _c : ""
         };
       },
-      { thumbs: true }
+      { thumbs: true, expandable: true }
     );
     await this.renderSection(
       contents.lore,
@@ -258,7 +276,8 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
           meta: (_b2 = fm.category) != null ? _b2 : "",
           badge: (_c = fm.category) != null ? _c : ""
         };
-      }
+      },
+      { expandable: true }
     );
     await this.renderSection(
       contents.timeline,
@@ -272,7 +291,8 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
           meta: (_b2 = fm.date) != null ? _b2 : "",
           badge: ""
         };
-      }
+      },
+      { expandable: true }
     );
     scroll.scrollTop = scrollTop;
     for (const { id } of tabs) this.applySearch(id);
@@ -332,7 +352,6 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
   /** Returns a displayable URL for the first image embedded in a note, or null. */
   findFirstImageSrc(content, file) {
     var _a, _b;
-    const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
     const re = /!\[\[([^\]]+)\]\]|!\[[^\]]*\]\((<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\)/g;
     let m;
     while ((m = re.exec(content)) !== null) {
@@ -389,7 +408,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     }
     if (!opts.employerGroups) {
       const list = container.createDiv("wb-list");
-      for (const entry of entries) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge);
+      for (const entry of entries) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
       this.createNoResultsLine(container, label);
       return;
     }
@@ -441,7 +460,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         return i === -1 ? saved.length : i;
       };
       const items = group.items.map((entry, index) => ({ entry, index })).sort((a, b) => rank(a.entry.file.path) - rank(b.entry.file.path) || a.index - b.index).map(({ entry }) => entry);
-      for (const entry of items) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge);
+      for (const entry of items) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
       this.enableReorder(list, key);
     }
     this.createNoResultsLine(container, label);
@@ -453,7 +472,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       attr: { "data-noun": label.toLowerCase() }
     });
   }
-  renderCard(parent, entry, getCard, thumbs, stackBadge) {
+  renderCard(parent, entry, getCard, thumbs, stackBadge, expandable) {
     const { file, content, fm } = entry;
     const { title, meta, badge, search } = getCard(fm);
     const card = parent.createDiv("wb-card");
@@ -463,24 +482,68 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     let body = card;
     if (thumbs) {
       card.addClass("wb-card-with-thumb");
-      const thumb = card.createDiv("wb-thumb");
+      const row = card.createDiv("wb-card-row");
+      const thumb = row.createDiv("wb-thumb");
       const src = this.findFirstImageSrc(content, file);
       if (src) {
         const img = thumb.createEl("img", { attr: { src, alt: "", draggable: "false" } });
         img.onerror = () => img.remove();
       }
-      body = card.createDiv("wb-card-body");
+      body = row.createDiv("wb-card-body");
     }
     const titleEl = body.createDiv("wb-card-title");
-    titleEl.setText(title);
+    titleEl.createSpan({ text: title });
+    if (expandable) titleEl.addClass("wb-card-title-row");
     if (badge) {
       const badgeHost = stackBadge ? body.createDiv("wb-card-badge-row") : titleEl;
       const b = badgeHost.createSpan({ cls: `wb-badge wb-badge-${badge.toLowerCase()}` });
       b.setText(badge);
     }
+    if (expandable) (0, import_obsidian.setIcon)(titleEl.createSpan({ cls: "wb-card-chevron" }), "chevron-right");
     if (meta) for (const line of meta.split("\n")) body.createDiv({ cls: "wb-card-meta", text: line });
-    card.onclick = () => this.app.workspace.getLeaf().openFile(file);
+    if (expandable) {
+      card.setAttribute("role", "button");
+      card.setAttribute("tabindex", "0");
+      card.setAttribute("aria-expanded", "false");
+      card.onclick = () => this.toggleCardExpand(card, entry);
+      card.onkeydown = (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          this.toggleCardExpand(card, entry);
+        }
+      };
+    } else {
+      card.onclick = () => this.app.workspace.getLeaf().openFile(file);
+    }
     return card;
+  }
+  /**
+   * Expands a card in place to show the note's text (no images) instead of opening it in the
+   * editor, so writing in the main pane isn't interrupted. An Edit button in the expanded area
+   * still opens the note the normal way. Clicking the card again (or its chevron) collapses it.
+   */
+  toggleCardExpand(card, entry) {
+    var _a;
+    const wasExpanded = card.classList.contains("wb-card-expanded");
+    (_a = card.querySelector(":scope > .wb-card-expand")) == null ? void 0 : _a.remove();
+    card.removeClass("wb-card-expanded");
+    card.setAttribute("aria-expanded", "false");
+    if (wasExpanded) return;
+    card.addClass("wb-card-expanded");
+    card.setAttribute("aria-expanded", "true");
+    const expand = card.createDiv("wb-card-expand");
+    expand.setAttribute("draggable", "false");
+    expand.onclick = (e) => e.stopPropagation();
+    const body = expand.createDiv("wb-card-expand-body");
+    body.addClass("markdown-rendered");
+    const bodyText = stripLeadingHeading(stripFrontmatterBlock(entry.content));
+    const textOnly = stripGraphics(bodyText);
+    import_obsidian.MarkdownRenderer.render(this.app, textOnly, body, entry.file.path, this);
+    const footer = expand.createDiv("wb-card-expand-footer");
+    const editBtn = footer.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
+    (0, import_obsidian.setIcon)(editBtn.createEl("span", { cls: "wb-btn-icon" }), "pencil");
+    editBtn.createEl("span", { text: "Edit" });
+    editBtn.onclick = () => this.app.workspace.getLeaf().openFile(entry.file);
   }
   /**
    * Makes the cards in one employer's list drag-sortable. Each list only accepts cards

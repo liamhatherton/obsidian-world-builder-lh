@@ -1,6 +1,7 @@
 import {
 	App,
 	ItemView,
+	MarkdownRenderer,
 	Modal,
 	Notice,
 	Plugin,
@@ -26,6 +27,41 @@ const DEFAULT_SETTINGS: WorldBuilderSettings = { worldFolder: "World", character
 
 function slugify(s: string) {
 	return s.replace(/[/\\:*?"<>|#^[\]]/g, "-").trim();
+}
+
+/** Extensions treated as "graphics" when filtering images out of note text. */
+const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
+
+/** Strips a leading YAML frontmatter block, if present, from note content. */
+function stripFrontmatterBlock(content: string): string {
+	return content.replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "");
+}
+
+/**
+ * Strips a leading "# ..." heading, if the note's body starts with one. The character template
+ * always opens with "# Name" right after the frontmatter, which just repeats what the card
+ * already shows above, so the expanded preview hides it whatever name it carries.
+ */
+function stripLeadingHeading(markdown: string): string {
+	const lines = markdown.replace(/^\s+/, "").split("\n");
+	if (!/^#\s+\S/.test(lines[0] ?? "")) return markdown;
+	lines.shift();
+	while (lines[0] === "") lines.shift();
+	return lines.join("\n");
+}
+
+/**
+ * Removes image embeds and tags from markdown text ("text only" previews).
+ * Wiki-embeds of non-image files (e.g. `![[Other Note]]`) are left alone.
+ */
+function stripGraphics(markdown: string): string {
+	return markdown
+		.replace(/!\[\[([^\]]+)\]\]/g, (match: string, inner: string) => {
+			const target = inner.split("|")[0]!.split("#")[0]!.trim();
+			return IMG_EXT.test(target) ? "" : match;
+		})
+		.replace(/!\[[^\]]*\]\((?:<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\)/g, "") // ![alt](path)
+		.replace(/<img\b[^>]*\/?>/gi, ""); // raw <img> tags
 }
 
 async function ensureFolder(app: App, path: string) {
@@ -89,8 +125,7 @@ function normalizeForSearch(s: string): string {
  * <font color=...> around headings).
  */
 function documentSearchText(content: string, fm: Record<string, string>): string {
-	const body = content
-		.replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "")
+	const body = stripFrontmatterBlock(content)
 		.replace(/!\[\[[^\]]*\]\]/g, " ") // ![[embeds]]
 		.replace(/!\[[^\]]*\]\([^)]*\)/g, " ") // ![images](...)
 		.replace(/\[\[[^\]|]*\|([^\]]*)\]\]/g, "$1") // [[target|shown text]] -> shown text
@@ -264,7 +299,7 @@ class WorldBuilderView extends ItemView {
 				// What the search bar matches against.
 				search: [fm.name, fm.employer, fm.ship, fm.home].filter(Boolean).join(" "),
 			}),
-			{ thumbs: true, employerGroups: true, stackBadge: true }
+			{ thumbs: true, employerGroups: true, stackBadge: true, expandable: true }
 		);
 
 		await this.renderSection(
@@ -277,7 +312,7 @@ class WorldBuilderView extends ItemView {
 				meta: `${fm.type ?? ""} ${fm.parent ? `· in ${fm.parent}` : ""}`.trim(),
 				badge: fm.type ?? "",
 			}),
-			{ thumbs: true }
+			{ thumbs: true, expandable: true }
 		);
 
 		await this.renderSection(
@@ -290,7 +325,7 @@ class WorldBuilderView extends ItemView {
 				meta: fm.goals ?? "",
 				badge: fm.alignment ?? "",
 			}),
-			{ thumbs: true }
+			{ thumbs: true, expandable: true }
 		);
 
 		await this.renderSection(
@@ -302,7 +337,8 @@ class WorldBuilderView extends ItemView {
 				title: fm.title ?? "Untitled",
 				meta: fm.category ?? "",
 				badge: fm.category ?? "",
-			})
+			}),
+			{ expandable: true }
 		);
 
 		await this.renderSection(
@@ -314,7 +350,8 @@ class WorldBuilderView extends ItemView {
 				title: fm.title ?? "Untitled",
 				meta: fm.date ?? "",
 				badge: "",
-			})
+			}),
+			{ expandable: true }
 		);
 
 		// Redrawing empties the container, which resets its scroll position; restore it.
@@ -380,7 +417,6 @@ class WorldBuilderView extends ItemView {
 
 	/** Returns a displayable URL for the first image embedded in a note, or null. */
 	findFirstImageSrc(content: string, file: TFile): string | null {
-		const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
 		const re = /!\[\[([^\]]+)\]\]|!\[[^\]]*\]\((<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\)/g;
 		let m: RegExpExecArray | null;
 		while ((m = re.exec(content)) !== null) {
@@ -414,7 +450,14 @@ class WorldBuilderView extends ItemView {
 		label: string,
 		onCreate: () => void,
 		getCard: (fm: Record<string, string>) => { title: string; meta: string; badge: string },
-		opts: { thumbs?: boolean; reload?: boolean; employerGroups?: boolean; stackBadge?: boolean } = {}
+		opts: {
+			thumbs?: boolean;
+			reload?: boolean;
+			employerGroups?: boolean;
+			stackBadge?: boolean;
+			/** Clicking a card expands an in-sidebar, text-only preview instead of opening the note. */
+			expandable?: boolean;
+		} = {}
 	) {
 		const container = pane.body;
 		const hdr = pane.head.createDiv("wb-section-header");
@@ -449,7 +492,7 @@ class WorldBuilderView extends ItemView {
 
 		if (!opts.employerGroups) {
 			const list = container.createDiv("wb-list");
-			for (const entry of entries) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge);
+			for (const entry of entries) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
 			this.createNoResultsLine(container, label);
 			return;
 		}
@@ -517,7 +560,7 @@ class WorldBuilderView extends ItemView {
 				.sort((a, b) => rank(a.entry.file.path) - rank(b.entry.file.path) || a.index - b.index)
 				.map(({ entry }) => entry);
 
-			for (const entry of items) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge);
+			for (const entry of items) this.renderCard(list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
 			this.enableReorder(list, key);
 		}
 
@@ -537,7 +580,8 @@ class WorldBuilderView extends ItemView {
 		entry: NoteEntry,
 		getCard: CardFn,
 		thumbs: boolean,
-		stackBadge: boolean
+		stackBadge: boolean,
+		expandable: boolean
 	): HTMLElement {
 		const { file, content, fm } = entry;
 		const { title, meta, badge, search } = getCard(fm);
@@ -547,28 +591,89 @@ class WorldBuilderView extends ItemView {
 		card.setAttribute("data-path", file.path);
 		// Characters supply their own (four properties); everything else searches name + note text.
 		this.searchIndex.set(card, normalizeForSearch(search ?? `${title} ${documentSearchText(content, fm)}`));
+		// Thumbnail + text live in their own row, kept separate from the card itself so that when
+		// an expand area is appended below (see toggleCardExpand), it isn't pulled into this row's
+		// flex layout as a second column — it stays a full-width block underneath.
 		let body: HTMLElement = card;
 		if (thumbs) {
 			card.addClass("wb-card-with-thumb");
-			const thumb = card.createDiv("wb-thumb");
+			const row = card.createDiv("wb-card-row");
+			const thumb = row.createDiv("wb-thumb");
 			const src = this.findFirstImageSrc(content, file);
 			if (src) {
 				const img = thumb.createEl("img", { attr: { src, alt: "", draggable: "false" } });
 				img.onerror = () => img.remove();
 			}
-			body = card.createDiv("wb-card-body");
+			body = row.createDiv("wb-card-body");
 		}
 		const titleEl = body.createDiv("wb-card-title");
-		titleEl.setText(title);
+		titleEl.createSpan({ text: title });
+		if (expandable) titleEl.addClass("wb-card-title-row");
 		if (badge) {
 			// stackBadge: badge on its own line under the name; otherwise inline beside it
 			const badgeHost = stackBadge ? body.createDiv("wb-card-badge-row") : titleEl;
 			const b = badgeHost.createSpan({ cls: `wb-badge wb-badge-${badge.toLowerCase()}` });
 			b.setText(badge);
 		}
+		// Added last so it's always the rightmost element in the title row, after any inline badge.
+		if (expandable) setIcon(titleEl.createSpan({ cls: "wb-card-chevron" }), "chevron-right");
 		if (meta) for (const line of meta.split("\n")) body.createDiv({ cls: "wb-card-meta", text: line });
-		card.onclick = () => this.app.workspace.getLeaf().openFile(file);
+
+		if (expandable) {
+			card.setAttribute("role", "button");
+			card.setAttribute("tabindex", "0");
+			card.setAttribute("aria-expanded", "false");
+			card.onclick = () => this.toggleCardExpand(card, entry);
+			card.onkeydown = (e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					this.toggleCardExpand(card, entry);
+				}
+			};
+		} else {
+			card.onclick = () => this.app.workspace.getLeaf().openFile(file);
+		}
 		return card;
+	}
+
+	/**
+	 * Expands a card in place to show the note's text (no images) instead of opening it in the
+	 * editor, so writing in the main pane isn't interrupted. An Edit button in the expanded area
+	 * still opens the note the normal way. Clicking the card again (or its chevron) collapses it.
+	 */
+	private toggleCardExpand(card: HTMLElement, entry: NoteEntry) {
+		const wasExpanded = card.classList.contains("wb-card-expanded");
+		card.querySelector(":scope > .wb-card-expand")?.remove();
+		card.removeClass("wb-card-expanded");
+		card.setAttribute("aria-expanded", "false");
+		if (wasExpanded) return;
+
+		card.addClass("wb-card-expanded");
+		card.setAttribute("aria-expanded", "true");
+
+		const expand = card.createDiv("wb-card-expand");
+		// Cards are drag-sortable (draggable="true"); override that here so selecting text in the
+		// preview doesn't get hijacked into a card drag.
+		expand.setAttribute("draggable", "false");
+		// Clicks inside the expanded area (the Edit button, links, selecting text) shouldn't
+		// also toggle the card's own expand/collapse handler.
+		expand.onclick = (e) => e.stopPropagation();
+
+		const body = expand.createDiv("wb-card-expand-body");
+		body.addClass("markdown-rendered");
+		// Frontmatter (properties already shown on the card above) and images are both stripped,
+		// plus the leading "# Name" heading the character template opens with, which just
+		// restates the card's own title.
+		const bodyText = stripLeadingHeading(stripFrontmatterBlock(entry.content));
+		const textOnly = stripGraphics(bodyText);
+		MarkdownRenderer.render(this.app, textOnly, body, entry.file.path, this);
+
+		// Edit button sits at the bottom, under its own divider, so it doesn't compete with the text.
+		const footer = expand.createDiv("wb-card-expand-footer");
+		const editBtn = footer.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
+		setIcon(editBtn.createEl("span", { cls: "wb-btn-icon" }), "pencil");
+		editBtn.createEl("span", { text: "Edit" });
+		editBtn.onclick = () => this.app.workspace.getLeaf().openFile(entry.file);
 	}
 
 	/**
