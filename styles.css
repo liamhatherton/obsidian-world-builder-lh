@@ -194,6 +194,12 @@
 	transition: transform 0.15s ease;
 }
 .wb-group-chevron svg { width: 14px; height: 14px; }
+.wb-group-logo {
+	width: 12px;
+	height: 12px;
+	flex: 0 0 12px;
+	object-fit: contain;
+}
 .wb-group-header.is-collapsed .wb-group-chevron { transform: rotate(-90deg); }
 .wb-list.is-collapsed { display: none; }
 

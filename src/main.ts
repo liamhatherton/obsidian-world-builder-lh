@@ -708,6 +708,22 @@ class WorldBuilderView extends ItemView {
 			group.items.push(entry);
 		}
 
+		// Each employer's logo: the first image in its note under <World>/Employers, matched by
+		// the note's `name` property or its file name (case-insensitive).
+		const employerLogos = new Map<string, string>();
+		const employerFolder = `${this.plugin.settings.worldFolder}/Employers/`;
+		for (const file of this.app.vault.getMarkdownFiles()) {
+			if (!file.path.startsWith(employerFolder)) continue;
+			const content = await this.app.vault.cachedRead(file);
+			const src = this.findFirstImageSrc(content, file);
+			if (!src) continue;
+			const names = [readFrontmatter(content).name ?? "", file.basename];
+			for (const n of names) {
+				const k = parseRefName(n).toLowerCase();
+				if (k && !employerLogos.has(k)) employerLogos.set(k, src);
+			}
+		}
+
 		// Alphabetical by employer, with characters who have no employer last.
 		const orderedGroups = [...groups.entries()].sort(
 			([a], [b]) => (a === "" ? 1 : 0) - (b === "" ? 1 : 0) || a.localeCompare(b)
@@ -718,6 +734,14 @@ class WorldBuilderView extends ItemView {
 			header.setAttribute("role", "button");
 			header.setAttribute("tabindex", "0");
 			setIcon(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
+			const logoSrc = key ? employerLogos.get(parseRefName(key).toLowerCase()) : undefined;
+			if (logoSrc) {
+				const logo = header.createEl("img", {
+					cls: "wb-group-logo",
+					attr: { src: logoSrc, alt: "", draggable: "false" },
+				});
+				logo.onerror = () => logo.remove();
+			}
 			header.createEl("span", { cls: "wb-group-title", text: group.label });
 			const list = container.createDiv("wb-list");
 

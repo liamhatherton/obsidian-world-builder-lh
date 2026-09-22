@@ -507,7 +507,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     return null;
   }
   async renderSection(tab, pane, folderPath, label, onCreate, getCard, opts = {}) {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e, _f, _g;
     const container = pane.body;
     const hdr = pane.head.createDiv("wb-section-header");
     const titleGroup = hdr.createDiv("wb-section-title");
@@ -597,6 +597,19 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       }
       group.items.push(entry);
     }
+    const employerLogos = /* @__PURE__ */ new Map();
+    const employerFolder = `${this.plugin.settings.worldFolder}/Employers/`;
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      if (!file.path.startsWith(employerFolder)) continue;
+      const content = await this.app.vault.cachedRead(file);
+      const src = this.findFirstImageSrc(content, file);
+      if (!src) continue;
+      const names = [(_f = readFrontmatter(content).name) != null ? _f : "", file.basename];
+      for (const n of names) {
+        const k = parseRefName(n).toLowerCase();
+        if (k && !employerLogos.has(k)) employerLogos.set(k, src);
+      }
+    }
     const orderedGroups = [...groups.entries()].sort(
       ([a], [b]) => (a === "" ? 1 : 0) - (b === "" ? 1 : 0) || a.localeCompare(b)
     );
@@ -605,6 +618,14 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       header.setAttribute("role", "button");
       header.setAttribute("tabindex", "0");
       (0, import_obsidian.setIcon)(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
+      const logoSrc = key ? employerLogos.get(parseRefName(key).toLowerCase()) : void 0;
+      if (logoSrc) {
+        const logo = header.createEl("img", {
+          cls: "wb-group-logo",
+          attr: { src: logoSrc, alt: "", draggable: "false" }
+        });
+        logo.onerror = () => logo.remove();
+      }
       header.createEl("span", { cls: "wb-group-title", text: group.label });
       const list = container.createDiv("wb-list");
       const applyCollapsed = (collapsed) => {
@@ -628,7 +649,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
           toggleCollapsed();
         }
       };
-      const items = this.orderEntries(group.items, (_f = this.plugin.settings.characterOrder[key]) != null ? _f : []);
+      const items = this.orderEntries(group.items, (_g = this.plugin.settings.characterOrder[key]) != null ? _g : []);
       for (const entry of items) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
       this.enableReorder(list, async (order) => {
         this.plugin.settings.characterOrder[key] = order;
