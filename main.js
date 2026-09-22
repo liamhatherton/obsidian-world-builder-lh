@@ -134,7 +134,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     return "World Builder";
   }
   getIcon() {
-    return "globe";
+    return "orbit";
   }
   async onOpen() {
     await this.render();
@@ -1249,7 +1249,7 @@ var WorldBuilderPlugin = class extends import_obsidian.Plugin {
   async onload() {
     await this.loadSettings();
     this.registerView(VIEW_TYPE, (leaf) => new WorldBuilderView(leaf, this));
-    this.addRibbonIcon("globe", "World Builder", () => this.activateSidebar());
+    this.addRibbonIcon("orbit", "World Builder", () => this.activateSidebar());
     this.addCommand({
       id: "open-sidebar",
       name: "Open World Builder sidebar",

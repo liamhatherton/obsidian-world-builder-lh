@@ -205,7 +205,7 @@ class WorldBuilderView extends ItemView {
 
 	getViewType() { return VIEW_TYPE; }
 	getDisplayText() { return "World Builder"; }
-	getIcon() { return "globe"; }
+	getIcon() { return "orbit"; }
 
 	async onOpen() { await this.render(); }
 	async onClose() {}
@@ -1440,7 +1440,7 @@ export default class WorldBuilderPlugin extends Plugin {
 
 		this.registerView(VIEW_TYPE, (leaf) => new WorldBuilderView(leaf, this));
 
-		this.addRibbonIcon("globe", "World Builder", () => this.activateSidebar());
+		this.addRibbonIcon("orbit", "World Builder", () => this.activateSidebar());
 
 		this.addCommand({
 			id: "open-sidebar",
