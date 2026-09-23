@@ -26,6 +26,10 @@ interface WorldBuilderSettings {
 	collapsedParents: string[];
 	/** Custom manual order for the flat (non-Characters) tabs, keyed by tab id -> ordered note paths. */
 	sectionOrder: Partial<Record<WBTab, string[]>>;
+	/** Bookmarked note paths (any section), in the order they were added or dragged into. */
+	bookmarks: string[];
+	/** Section groups ("characters", "locations", ...) collapsed on the Bookmarks view. */
+	collapsedBookmarkGroups: string[];
 }
 const DEFAULT_SETTINGS: WorldBuilderSettings = {
 	worldFolder: "World",
@@ -34,6 +38,8 @@ const DEFAULT_SETTINGS: WorldBuilderSettings = {
 	collapsedEmployerTypes: [],
 	collapsedParents: [],
 	sectionOrder: {},
+	bookmarks: [],
+	collapsedBookmarkGroups: [],
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -181,7 +187,18 @@ interface TabPane { head: HTMLElement; body: HTMLElement; }
 
 type CardFn = (fm: Record<string, string>) => { title: string; meta: string; badge: string; search?: string };
 
-type WBTab = "characters" | "locations" | "employers" | "lore" | "timeline";
+/** The five entry sections, each with its own tab and folder. */
+type SectionTab = "characters" | "locations" | "employers" | "lore" | "timeline";
+/** Everything the sidebar can show: a section, or the Bookmarks view (opened from the section header, not the tab bar). */
+type WBTab = SectionTab | "bookmarks";
+const SECTION_TABS: SectionTab[] = ["characters", "locations", "employers", "lore", "timeline"];
+const SECTION_LABELS: Record<SectionTab, string> = {
+	characters: "Characters",
+	locations: "Locations",
+	employers: "Employers",
+	lore: "Lore",
+	timeline: "Timeline",
+};
 
 /** Search bar wording per tab. Characters match on four properties; every other tab matches the note's name and text. */
 const SEARCH_HINTS: Record<WBTab, { noun: string; tip: string }> = {
@@ -190,6 +207,7 @@ const SEARCH_HINTS: Record<WBTab, { noun: string; tip: string }> = {
 	employers: { noun: "employers", tip: "Matches the name and the text of the note" },
 	lore: { noun: "lore", tip: "Matches the title and the text of the note" },
 	timeline: { noun: "timeline", tip: "Matches the title and the text of the note" },
+	bookmarks: { noun: "bookmarks", tip: "Matches each bookmark the same way its own tab does" },
 };
 
 /**
@@ -273,7 +291,13 @@ class WorldBuilderView extends ItemView {
 	plugin: WorldBuilderPlugin;
 	activeTab: WBTab = "characters";
 	/** What is typed in the search bar for each tab; kept here so it survives a redraw (Reload, new note, ...). */
-	searchQueries: Record<WBTab, string> = { characters: "", locations: "", employers: "", lore: "", timeline: "" };
+	searchQueries: Record<WBTab, string> = { characters: "", locations: "", employers: "", lore: "", timeline: "", bookmarks: "" };
+	/** The section tab to return to when the Bookmarks button is clicked again while viewing bookmarks. */
+	private lastSectionTab: SectionTab = "characters";
+	/** How each section draws its cards, captured in renderSection() so the Bookmarks view can draw them the same way. */
+	private sectionConfigs: Partial<Record<SectionTab, { getCard: CardFn; thumbs: boolean; stackBadge: boolean }>> = {};
+	/** The Bookmarks button in every section header, highlighted while the Bookmarks view is open. */
+	private bookmarkHeaderButtons: HTMLButtonElement[] = [];
 	private searchTargets: Partial<Record<WBTab, HTMLElement>> = {};
 	/** Normalised text each card is matched against. */
 	private searchIndex = new WeakMap<HTMLElement, string>();
@@ -325,6 +349,8 @@ class WorldBuilderView extends ItemView {
 		this.entryByPath = new Map();
 		this.treeExpanders = new Map();
 		this.navButtons = [];
+		this.bookmarkHeaderButtons = [];
+		this.sectionConfigs = {};
 
 		// Fixed region: title, tabs, the active tab's section header (Reload / + New) and the search bar.
 		// It never scrolls; the lists below it live in their own scrolling region.
@@ -335,7 +361,7 @@ class WorldBuilderView extends ItemView {
 		header.createEl("h2", { text: "Hatherton's World Builder" });
 
 		const tabBar = fixed.createDiv("wb-tabs");
-		const tabs: { id: WBTab; label: string }[] = [
+		const tabs: { id: SectionTab; label: string }[] = [
 			{ id: "characters", label: "Characters" },
 			{ id: "locations", label: "Locations" },
 			{ id: "employers", label: "Employers" },
@@ -363,6 +389,15 @@ class WorldBuilderView extends ItemView {
 			contents[id] = pane;
 			this.searchTargets[id] = pane.body;
 		});
+		// The Bookmarks view has no tab of its own; it's opened from the Bookmarks button in each
+		// section header and takes the place of the section's list while it's open.
+		const bookmarksPane: TabPane = {
+			head: fixed.createDiv("wb-tab-content wb-tab-head"),
+			body: scroll.createDiv("wb-tab-content wb-tab-body wb-bookmarks-body"),
+		};
+		if (this.activeTab === "bookmarks") { bookmarksPane.head.addClass("active"); bookmarksPane.body.addClass("active"); }
+		contents.bookmarks = bookmarksPane;
+		this.searchTargets.bookmarks = bookmarksPane.body;
 		this.tabContents = contents;
 
 		// Search bar: last part of the fixed region, under the section header. Each tab keeps its own text.
@@ -502,6 +537,10 @@ class WorldBuilderView extends ItemView {
 			{ expandable: true }
 		);
 
+		// Bookmarks last: it reuses the entries and card styles the sections above just loaded.
+		this.renderSectionHeader(bookmarksPane, "Bookmarks", null, true);
+		this.renderBookmarks();
+
 		// Redrawing empties the container, which resets its scroll position; restore it.
 		scroll.scrollTop = scrollTop;
 
@@ -520,6 +559,7 @@ class WorldBuilderView extends ItemView {
 			this.navIndex = 0;
 		}
 		this.updateNavButtonStates();
+		this.updateBookmarkHeaderButtons();
 	}
 
 	/**
@@ -636,7 +676,7 @@ class WorldBuilderView extends ItemView {
 	}
 
 	async renderSection(
-		tab: WBTab,
+		tab: SectionTab,
 		pane: TabPane,
 		folderPath: string,
 		label: string,
@@ -660,36 +700,8 @@ class WorldBuilderView extends ItemView {
 		} = {}
 	) {
 		const container = pane.body;
-		const hdr = pane.head.createDiv("wb-section-header");
-		// Back/forward, then the label, grouped together at the left edge of the header.
-		const titleGroup = hdr.createDiv("wb-section-title");
-		const navGroup = titleGroup.createDiv("wb-nav-buttons");
-		const backBtn = navGroup.createEl("button", {
-			cls: "wb-nav-btn",
-			text: "<",
-			attr: { type: "button", "aria-label": "Back" },
-		});
-		const fwdBtn = navGroup.createEl("button", {
-			cls: "wb-nav-btn",
-			text: ">",
-			attr: { type: "button", "aria-label": "Forward" },
-		});
-		backBtn.onclick = () => this.navigateBack();
-		fwdBtn.onclick = () => this.navigateForward();
-		this.navButtons.push({ back: backBtn, fwd: fwdBtn });
-		titleGroup.createEl("span", { text: label });
-		const actions = hdr.createDiv("wb-section-actions");
-		if (opts.reload ?? true) {
-			const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary" });
-			setIcon(reloadBtn.createEl("span", { cls: "wb-btn-icon" }), "refresh-cw");
-			reloadBtn.createEl("span", { text: "Reload" });
-			reloadBtn.onclick = async () => {
-				await this.render();
-				new Notice("World Builder reloaded.");
-			};
-		}
-		const btn = actions.createEl("button", { text: "+ New", cls: "wb-btn-primary" });
-		btn.onclick = onCreate;
+		this.sectionConfigs[tab] = { getCard, thumbs: !!opts.thumbs, stackBadge: !!opts.stackBadge };
+		this.renderSectionHeader(pane, label, onCreate, opts.reload ?? true);
 
 		const files = this.app.vault.getMarkdownFiles().filter((f) =>
 			f.path.startsWith(folderPath + "/")
@@ -839,6 +851,53 @@ class WorldBuilderView extends ItemView {
 		}
 
 		this.createNoResultsLine(container, label);
+	}
+
+	/**
+	 * A tab's section header (fixed region): Back/Forward and the label on the left; Bookmarks,
+	 * Reload and (for the entry sections) + New on the right.
+	 */
+	private renderSectionHeader(pane: TabPane, label: string, onCreate: (() => void) | null, reload: boolean) {
+		const hdr = pane.head.createDiv("wb-section-header");
+		// Back/forward, then the label, grouped together at the left edge of the header.
+		const titleGroup = hdr.createDiv("wb-section-title");
+		const navGroup = titleGroup.createDiv("wb-nav-buttons");
+		const backBtn = navGroup.createEl("button", {
+			cls: "wb-nav-btn",
+			text: "<",
+			attr: { type: "button", "aria-label": "Back" },
+		});
+		const fwdBtn = navGroup.createEl("button", {
+			cls: "wb-nav-btn",
+			text: ">",
+			attr: { type: "button", "aria-label": "Forward" },
+		});
+		backBtn.onclick = () => this.navigateBack();
+		fwdBtn.onclick = () => this.navigateForward();
+		this.navButtons.push({ back: backBtn, fwd: fwdBtn });
+		titleGroup.createEl("span", { text: label });
+		const actions = hdr.createDiv("wb-section-actions");
+		// Bookmarks: icon-only, just left of Reload. Highlighted while the Bookmarks view is open.
+		const bookmarksBtn = actions.createEl("button", {
+			cls: "wb-btn-secondary wb-icon-btn wb-bookmarks-btn",
+			attr: { type: "button", "aria-label": "Bookmarks" },
+		});
+		setIcon(bookmarksBtn, "bookmark");
+		bookmarksBtn.onclick = () => this.toggleBookmarksView();
+		this.bookmarkHeaderButtons.push(bookmarksBtn);
+		if (reload) {
+			const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary" });
+			setIcon(reloadBtn.createEl("span", { cls: "wb-btn-icon" }), "refresh-cw");
+			reloadBtn.createEl("span", { text: "Reload" });
+			reloadBtn.onclick = async () => {
+				await this.render();
+				new Notice("World Builder reloaded.");
+			};
+		}
+		if (onCreate) {
+			const btn = actions.createEl("button", { text: "+ New", cls: "wb-btn-primary" });
+			btn.onclick = onCreate;
+		}
 	}
 
 	/**
@@ -1113,6 +1172,8 @@ class WorldBuilderView extends ItemView {
 		// Clicks inside the expanded area (the Edit button, links, selecting text) shouldn't
 		// also toggle the card's own expand/collapse handler.
 		expand.onclick = (e) => e.stopPropagation();
+		// Same for keys: Enter/Space on the footer buttons shouldn't reach the card's own key handler.
+		expand.onkeydown = (e) => e.stopPropagation();
 
 		const body = expand.createDiv("wb-card-expand-body");
 		body.addClass("markdown-rendered");
@@ -1135,8 +1196,15 @@ class WorldBuilderView extends ItemView {
 			if (href) this.followWikiLink(href, entry.file.path);
 		});
 
-		// Edit button sits at the bottom, under its own divider, so it doesn't compete with the text.
+		// Bookmark (left) and Edit (right) sit at the bottom, under their own divider, so they don't compete with the text.
 		const footer = expand.createDiv("wb-card-expand-footer");
+		const bookmarkBtn = footer.createEl("button", {
+			cls: "wb-btn-secondary wb-icon-btn wb-bookmark-toggle",
+			attr: { type: "button", "data-bookmark-path": entry.file.path },
+		});
+		setIcon(bookmarkBtn, "bookmark");
+		this.syncBookmarkToggle(bookmarkBtn, this.plugin.settings.bookmarks.includes(entry.file.path));
+		bookmarkBtn.onclick = () => this.toggleBookmark(entry.file.path);
 		const editBtn = footer.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
 		setIcon(editBtn.createEl("span", { cls: "wb-btn-icon" }), "pencil");
 		editBtn.createEl("span", { text: "Edit" });
@@ -1146,22 +1214,13 @@ class WorldBuilderView extends ItemView {
 	}
 
 	/** The section folder a tab's notes live in, e.g. "World/Characters". */
-	private tabFolder(tab: WBTab): string {
-		const folder = this.plugin.settings.worldFolder;
-		const names: Record<WBTab, string> = {
-			characters: "Characters",
-			locations: "Locations",
-			employers: "Employers",
-			lore: "Lore",
-			timeline: "Timeline",
-		};
-		return `${folder}/${names[tab]}`;
+	private tabFolder(tab: SectionTab): string {
+		return `${this.plugin.settings.worldFolder}/${SECTION_LABELS[tab]}`;
 	}
 
 	/** Which tab (if any) a given file's own card lives on. */
-	private findEntryTab(file: TFile): WBTab | null {
-		const tabs: WBTab[] = ["characters", "locations", "employers", "lore", "timeline"];
-		for (const tab of tabs) {
+	private findEntryTab(file: TFile): SectionTab | null {
+		for (const tab of SECTION_TABS) {
 			if (file.path.startsWith(this.tabFolder(tab) + "/")) return tab;
 		}
 		return null;
@@ -1173,6 +1232,7 @@ class WorldBuilderView extends ItemView {
 	 */
 	private switchTab(id: WBTab) {
 		this.activeTab = id;
+		if (id !== "bookmarks") this.lastSectionTab = id;
 		this.tabBarEl?.querySelectorAll<HTMLElement>(".wb-tab").forEach((b) => b.removeClass("active"));
 		this.tabBarEl?.querySelector<HTMLElement>(`.wb-tab[data-tab="${id}"]`)?.addClass("active");
 		Object.values(this.tabContents).forEach((c) => { c?.head.removeClass("active"); c?.body.removeClass("active"); });
@@ -1180,6 +1240,143 @@ class WorldBuilderView extends ItemView {
 		this.tabContents[id]?.body.addClass("active");
 		this.showTabSearchFn?.();
 		this.updateShadowFn?.();
+		this.updateBookmarkHeaderButtons();
+	}
+
+	// ─── Bookmarks ───────────────────────────────────────────────────────────
+
+	/** The header's Bookmarks button: opens the Bookmarks view, or goes back to the last section if it's already open. */
+	private toggleBookmarksView() {
+		const target: WBTab = this.activeTab === "bookmarks" ? this.lastSectionTab : "bookmarks";
+		this.switchTab(target);
+		this.recordNav(target, null);
+	}
+
+	private updateBookmarkHeaderButtons() {
+		const open = this.activeTab === "bookmarks";
+		for (const btn of this.bookmarkHeaderButtons) {
+			btn.classList.toggle("is-active", open);
+			btn.setAttribute("aria-pressed", String(open));
+			btn.setAttribute("aria-label", open ? "Close bookmarks" : "Bookmarks");
+		}
+	}
+
+	private syncBookmarkToggle(btn: HTMLElement, on: boolean) {
+		btn.classList.toggle("is-bookmarked", on);
+		btn.setAttribute("aria-pressed", String(on));
+		btn.setAttribute("aria-label", on ? "Remove bookmark" : "Add bookmark");
+	}
+
+	/** Adds or removes one note from the bookmarks, updating every expanded copy of its card. */
+	private async toggleBookmark(path: string) {
+		const settings = this.plugin.settings;
+		const on = !settings.bookmarks.includes(path);
+		settings.bookmarks = on ? [...settings.bookmarks, path] : settings.bookmarks.filter((p) => p !== path);
+		this.containerEl.querySelectorAll<HTMLElement>(".wb-bookmark-toggle").forEach((btn) => {
+			if (btn.getAttribute("data-bookmark-path") === path) this.syncBookmarkToggle(btn, on);
+		});
+		// Redraw the Bookmarks list right away, so an entry un-bookmarked from inside the Bookmarks
+		// view disappears from it without needing Reload.
+		this.renderBookmarks();
+		await this.plugin.saveSettings();
+	}
+
+	/**
+	 * Draws the Bookmarks view's list: bookmarked entries grouped under collapsible section headers
+	 * (Characters, Locations, ...), each card drawn exactly as on its own tab. Each group can be
+	 * dragged into its own order, saved back into the single bookmarks list.
+	 */
+	private renderBookmarks() {
+		const pane = this.tabContents.bookmarks;
+		if (!pane) return;
+		const container = pane.body;
+		const tab: WBTab = "bookmarks";
+		// Keep what the reader had open (expanded cards, scroll position) across the redraw.
+		const wasExpanded = new Set(
+			Array.from(container.querySelectorAll<HTMLElement>(".wb-card.wb-card-expanded")).map(
+				(c) => c.getAttribute("data-path") ?? ""
+			)
+		);
+		const scrollEl = this.activeTab === tab ? container.closest<HTMLElement>(".wb-scroll") : null;
+		const scrollTop = scrollEl?.scrollTop ?? 0;
+		container.empty();
+
+		const entries = this.plugin.settings.bookmarks
+			.map((path) => this.entryByPath.get(path))
+			.filter((e): e is NoteEntry => !!e);
+		if (entries.length === 0) {
+			container.createDiv("wb-list").createDiv({
+				cls: "wb-empty",
+				text: "No bookmarks yet. Expand an entry and click its bookmark icon to add it here.",
+			});
+			this.applySearch(tab);
+			return;
+		}
+
+		for (const section of SECTION_TABS) {
+			const cfg = this.sectionConfigs[section];
+			const items = entries.filter((e) => this.findEntryTab(e.file) === section);
+			if (!cfg || items.length === 0) continue;
+
+			const header = container.createDiv("wb-group-header");
+			header.setAttribute("role", "button");
+			header.setAttribute("tabindex", "0");
+			setIcon(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
+			header.createEl("span", { cls: "wb-group-title", text: SECTION_LABELS[section] });
+			const list = container.createDiv("wb-list");
+
+			const applyCollapsed = (collapsed: boolean) => {
+				header.classList.toggle("is-collapsed", collapsed);
+				list.classList.toggle("is-collapsed", collapsed);
+				header.setAttribute("aria-expanded", String(!collapsed));
+			};
+			applyCollapsed(this.plugin.settings.collapsedBookmarkGroups.includes(section));
+			const toggleCollapsed = async () => {
+				if (normalizeForSearch(this.searchQueries[tab]).trim()) return;
+				const settings = this.plugin.settings;
+				const collapse = !settings.collapsedBookmarkGroups.includes(section);
+				settings.collapsedBookmarkGroups = collapse
+					? [...settings.collapsedBookmarkGroups, section]
+					: settings.collapsedBookmarkGroups.filter((k) => k !== section);
+				applyCollapsed(collapse);
+				await this.plugin.saveSettings();
+			};
+			header.onclick = toggleCollapsed;
+			header.onkeydown = (e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					toggleCollapsed();
+				}
+			};
+
+			for (const entry of items) this.renderCard(tab, list, entry, cfg.getCard, cfg.thumbs, cfg.stackBadge, true);
+			this.enableReorder(list, async (order) => {
+				const settings = this.plugin.settings;
+				// Skip cards un-bookmarked since the list was drawn, so a drag can't bring them back.
+				const kept = order.filter((p) => settings.bookmarks.includes(p));
+				settings.bookmarks = mergeGroupOrder(settings.bookmarks, items.map((e) => e.file.path), kept);
+				await this.plugin.saveSettings();
+			});
+		}
+
+		this.createNoResultsLine(container, "Bookmarks");
+		this.applySearch(tab);
+
+		// Re-open the cards that were expanded before the redraw, without adding history entries.
+		if (wasExpanded.size) {
+			this.restoringNav = true;
+			try {
+				container.querySelectorAll<HTMLElement>(".wb-card").forEach((card) => {
+					const path = card.getAttribute("data-path") ?? "";
+					const entry = this.entryByPath.get(path);
+					if (entry && wasExpanded.has(path)) this.toggleCardExpand(tab, card, entry);
+				});
+			} finally {
+				this.restoringNav = false;
+			}
+		}
+		if (scrollEl) scrollEl.scrollTop = scrollTop;
+		this.refreshCurrentCardHighlight();
 	}
 
 	/**
@@ -1900,7 +2097,17 @@ export default class WorldBuilderPlugin extends Plugin {
 					const i = order.indexOf(oldPath);
 					if (i !== -1) { order[i] = file.path; changed = true; }
 				}
+				const b = this.settings.bookmarks.indexOf(oldPath);
+				if (b !== -1) { this.settings.bookmarks[b] = file.path; changed = true; }
 				if (changed) await this.saveSettings();
+			})
+		);
+		// A deleted note's bookmark goes with it.
+		this.registerEvent(
+			this.app.vault.on("delete", async (file) => {
+				if (!this.settings.bookmarks.includes(file.path)) return;
+				this.settings.bookmarks = this.settings.bookmarks.filter((p) => p !== file.path);
+				await this.saveSettings();
 			})
 		);
 
@@ -1932,6 +2139,8 @@ export default class WorldBuilderPlugin extends Plugin {
 		this.settings.collapsedEmployerTypes = data?.collapsedEmployerTypes ?? [];
 		this.settings.collapsedParents = data?.collapsedParents ?? [];
 		this.settings.sectionOrder = data?.sectionOrder ?? {};
+		this.settings.bookmarks = data?.bookmarks ?? [];
+		this.settings.collapsedBookmarkGroups = data?.collapsedBookmarkGroups ?? [];
 	}
 	async saveSettings() {
 		await this.saveData(this.settings);

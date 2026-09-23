@@ -345,10 +345,11 @@
 .wb-card-expand-body > :first-child { margin-top: 0; }
 .wb-card-expand-body > :last-child { margin-bottom: 0; }
 
-/* Edit button: bottom of the expanded area, under its own divider (same darker token as above). */
+/* Bookmark (left) and Edit (right): bottom of the expanded area, under its own divider (same darker token as above). */
 .wb-card-expand-footer {
 	display: flex;
-	justify-content: flex-end;
+	justify-content: space-between;
+	align-items: stretch;
 	margin-top: 10px;
 	padding-top: 10px;
 	border-top: 1px solid var(--wb-expand-divider);
@@ -472,3 +473,29 @@
 
 .wb-modal .setting-item { border-top: none; }
 .wb-textarea { width: 100%; resize: vertical; min-height: 70px; }
+
+/* ─── Bookmarks ─────────────────────────────────────────────────────────── */
+
+/* Icon-only buttons: the header's Bookmarks button and the bookmark toggle in an expanded card.
+   Stretched to the height of the text button beside them (Reload / Edit). */
+.wb-icon-btn {
+	justify-content: center;
+	align-self: stretch;
+	height: auto;
+	padding: 4px 7px;
+	color: var(--text-muted);
+}
+.wb-icon-btn:hover { color: var(--text-normal); }
+.wb-icon-btn svg { width: 14px; height: 14px; }
+
+/* Toggled on (entry bookmarked / Bookmarks view open): accent-colored, filled bookmark. */
+.wb-icon-btn.is-bookmarked,
+.wb-icon-btn.is-active,
+.wb-icon-btn.is-bookmarked:hover,
+.wb-icon-btn.is-active:hover {
+	color: var(--interactive-accent);
+}
+.wb-icon-btn.is-bookmarked svg,
+.wb-icon-btn.is-active svg {
+	fill: currentColor;
+}

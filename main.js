@@ -29,7 +29,9 @@ var DEFAULT_SETTINGS = {
   collapsedEmployers: [],
   collapsedEmployerTypes: [],
   collapsedParents: [],
-  sectionOrder: {}
+  sectionOrder: {},
+  bookmarks: [],
+  collapsedBookmarkGroups: []
 };
 var EMPLOYER_TYPES = [
   { key: "corporation", label: "Corporation" },
@@ -108,12 +110,21 @@ function documentSearchText(content, fm) {
   const values = Object.entries(fm).filter(([key]) => key !== "entry_type").map(([, value]) => value);
   return [...values, body].join(" ");
 }
+var SECTION_TABS = ["characters", "locations", "employers", "lore", "timeline"];
+var SECTION_LABELS = {
+  characters: "Characters",
+  locations: "Locations",
+  employers: "Employers",
+  lore: "Lore",
+  timeline: "Timeline"
+};
 var SEARCH_HINTS = {
   characters: { noun: "characters", tip: "Matches name, employer, ship and home" },
   locations: { noun: "locations", tip: "Matches the name and the text of the note" },
   employers: { noun: "employers", tip: "Matches the name and the text of the note" },
   lore: { noun: "lore", tip: "Matches the title and the text of the note" },
-  timeline: { noun: "timeline", tip: "Matches the title and the text of the note" }
+  timeline: { noun: "timeline", tip: "Matches the title and the text of the note" },
+  bookmarks: { noun: "bookmarks", tip: "Matches each bookmark the same way its own tab does" }
 };
 function buildParentTree(entries, getParentName, getOwnName) {
   const nameIndex = /* @__PURE__ */ new Map();
@@ -178,7 +189,13 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     super(leaf);
     this.activeTab = "characters";
     /** What is typed in the search bar for each tab; kept here so it survives a redraw (Reload, new note, ...). */
-    this.searchQueries = { characters: "", locations: "", employers: "", lore: "", timeline: "" };
+    this.searchQueries = { characters: "", locations: "", employers: "", lore: "", timeline: "", bookmarks: "" };
+    /** The section tab to return to when the Bookmarks button is clicked again while viewing bookmarks. */
+    this.lastSectionTab = "characters";
+    /** How each section draws its cards, captured in renderSection() so the Bookmarks view can draw them the same way. */
+    this.sectionConfigs = {};
+    /** The Bookmarks button in every section header, highlighted while the Bookmarks view is open. */
+    this.bookmarkHeaderButtons = [];
     this.searchTargets = {};
     /** Normalised text each card is matched against. */
     this.searchIndex = /* @__PURE__ */ new WeakMap();
@@ -230,6 +247,8 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     this.entryByPath = /* @__PURE__ */ new Map();
     this.treeExpanders = /* @__PURE__ */ new Map();
     this.navButtons = [];
+    this.bookmarkHeaderButtons = [];
+    this.sectionConfigs = {};
     const fixed = containerEl.createDiv("wb-fixed");
     const scroll = containerEl.createDiv("wb-scroll");
     const header = fixed.createDiv("wb-header");
@@ -264,6 +283,16 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       contents[id] = pane;
       this.searchTargets[id] = pane.body;
     });
+    const bookmarksPane = {
+      head: fixed.createDiv("wb-tab-content wb-tab-head"),
+      body: scroll.createDiv("wb-tab-content wb-tab-body wb-bookmarks-body")
+    };
+    if (this.activeTab === "bookmarks") {
+      bookmarksPane.head.addClass("active");
+      bookmarksPane.body.addClass("active");
+    }
+    contents.bookmarks = bookmarksPane;
+    this.searchTargets.bookmarks = bookmarksPane.body;
     this.tabContents = contents;
     const searchBox = fixed.createDiv("wb-search");
     (0, import_obsidian.setIcon)(searchBox.createEl("span", { cls: "wb-search-icon" }), "search");
@@ -414,6 +443,8 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       },
       { expandable: true }
     );
+    this.renderSectionHeader(bookmarksPane, "Bookmarks", null, true);
+    this.renderBookmarks();
     scroll.scrollTop = scrollTop;
     for (const { id } of tabs) this.applySearch(id);
     updateShadow();
@@ -427,6 +458,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       this.navIndex = 0;
     }
     this.updateNavButtonStates();
+    this.updateBookmarkHeaderButtons();
   }
   /**
    * Hides the cards on one tab that don't match its search text (and, on Characters, any employer
@@ -536,35 +568,8 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
   async renderSection(tab, pane, folderPath, label, onCreate, getCard, opts = {}) {
     var _a, _b, _c, _d, _e, _f, _g;
     const container = pane.body;
-    const hdr = pane.head.createDiv("wb-section-header");
-    const titleGroup = hdr.createDiv("wb-section-title");
-    const navGroup = titleGroup.createDiv("wb-nav-buttons");
-    const backBtn = navGroup.createEl("button", {
-      cls: "wb-nav-btn",
-      text: "<",
-      attr: { type: "button", "aria-label": "Back" }
-    });
-    const fwdBtn = navGroup.createEl("button", {
-      cls: "wb-nav-btn",
-      text: ">",
-      attr: { type: "button", "aria-label": "Forward" }
-    });
-    backBtn.onclick = () => this.navigateBack();
-    fwdBtn.onclick = () => this.navigateForward();
-    this.navButtons.push({ back: backBtn, fwd: fwdBtn });
-    titleGroup.createEl("span", { text: label });
-    const actions = hdr.createDiv("wb-section-actions");
-    if ((_a = opts.reload) != null ? _a : true) {
-      const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary" });
-      (0, import_obsidian.setIcon)(reloadBtn.createEl("span", { cls: "wb-btn-icon" }), "refresh-cw");
-      reloadBtn.createEl("span", { text: "Reload" });
-      reloadBtn.onclick = async () => {
-        await this.render();
-        new import_obsidian.Notice("World Builder reloaded.");
-      };
-    }
-    const btn = actions.createEl("button", { text: "+ New", cls: "wb-btn-primary" });
-    btn.onclick = onCreate;
+    this.sectionConfigs[tab] = { getCard, thumbs: !!opts.thumbs, stackBadge: !!opts.stackBadge };
+    this.renderSectionHeader(pane, label, onCreate, (_a = opts.reload) != null ? _a : true);
     const files = this.app.vault.getMarkdownFiles().filter(
       (f) => f.path.startsWith(folderPath + "/")
     );
@@ -709,6 +714,50 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       });
     }
     this.createNoResultsLine(container, label);
+  }
+  /**
+   * A tab's section header (fixed region): Back/Forward and the label on the left; Bookmarks,
+   * Reload and (for the entry sections) + New on the right.
+   */
+  renderSectionHeader(pane, label, onCreate, reload) {
+    const hdr = pane.head.createDiv("wb-section-header");
+    const titleGroup = hdr.createDiv("wb-section-title");
+    const navGroup = titleGroup.createDiv("wb-nav-buttons");
+    const backBtn = navGroup.createEl("button", {
+      cls: "wb-nav-btn",
+      text: "<",
+      attr: { type: "button", "aria-label": "Back" }
+    });
+    const fwdBtn = navGroup.createEl("button", {
+      cls: "wb-nav-btn",
+      text: ">",
+      attr: { type: "button", "aria-label": "Forward" }
+    });
+    backBtn.onclick = () => this.navigateBack();
+    fwdBtn.onclick = () => this.navigateForward();
+    this.navButtons.push({ back: backBtn, fwd: fwdBtn });
+    titleGroup.createEl("span", { text: label });
+    const actions = hdr.createDiv("wb-section-actions");
+    const bookmarksBtn = actions.createEl("button", {
+      cls: "wb-btn-secondary wb-icon-btn wb-bookmarks-btn",
+      attr: { type: "button", "aria-label": "Bookmarks" }
+    });
+    (0, import_obsidian.setIcon)(bookmarksBtn, "bookmark");
+    bookmarksBtn.onclick = () => this.toggleBookmarksView();
+    this.bookmarkHeaderButtons.push(bookmarksBtn);
+    if (reload) {
+      const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary" });
+      (0, import_obsidian.setIcon)(reloadBtn.createEl("span", { cls: "wb-btn-icon" }), "refresh-cw");
+      reloadBtn.createEl("span", { text: "Reload" });
+      reloadBtn.onclick = async () => {
+        await this.render();
+        new import_obsidian.Notice("World Builder reloaded.");
+      };
+    }
+    if (onCreate) {
+      const btn = actions.createEl("button", { text: "+ New", cls: "wb-btn-primary" });
+      btn.onclick = onCreate;
+    }
   }
   /**
    * Employers: one collapsible sub-section per `type` property (Corporation, Government, then Criminal),
@@ -925,6 +974,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     const expand = card.createDiv("wb-card-expand");
     expand.setAttribute("draggable", "false");
     expand.onclick = (e) => e.stopPropagation();
+    expand.onkeydown = (e) => e.stopPropagation();
     const body = expand.createDiv("wb-card-expand-body");
     body.addClass("markdown-rendered");
     const bodyText = stripLeadingHeading(stripFrontmatterBlock(entry.content));
@@ -941,6 +991,13 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       if (href) this.followWikiLink(href, entry.file.path);
     });
     const footer = expand.createDiv("wb-card-expand-footer");
+    const bookmarkBtn = footer.createEl("button", {
+      cls: "wb-btn-secondary wb-icon-btn wb-bookmark-toggle",
+      attr: { type: "button", "data-bookmark-path": entry.file.path }
+    });
+    (0, import_obsidian.setIcon)(bookmarkBtn, "bookmark");
+    this.syncBookmarkToggle(bookmarkBtn, this.plugin.settings.bookmarks.includes(entry.file.path));
+    bookmarkBtn.onclick = () => this.toggleBookmark(entry.file.path);
     const editBtn = footer.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
     (0, import_obsidian.setIcon)(editBtn.createEl("span", { cls: "wb-btn-icon" }), "pencil");
     editBtn.createEl("span", { text: "Edit" });
@@ -949,20 +1006,11 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
   }
   /** The section folder a tab's notes live in, e.g. "World/Characters". */
   tabFolder(tab) {
-    const folder = this.plugin.settings.worldFolder;
-    const names = {
-      characters: "Characters",
-      locations: "Locations",
-      employers: "Employers",
-      lore: "Lore",
-      timeline: "Timeline"
-    };
-    return `${folder}/${names[tab]}`;
+    return `${this.plugin.settings.worldFolder}/${SECTION_LABELS[tab]}`;
   }
   /** Which tab (if any) a given file's own card lives on. */
   findEntryTab(file) {
-    const tabs = ["characters", "locations", "employers", "lore", "timeline"];
-    for (const tab of tabs) {
+    for (const tab of SECTION_TABS) {
       if (file.path.startsWith(this.tabFolder(tab) + "/")) return tab;
     }
     return null;
@@ -974,6 +1022,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
   switchTab(id) {
     var _a, _b, _c, _d, _e, _f, _g;
     this.activeTab = id;
+    if (id !== "bookmarks") this.lastSectionTab = id;
     (_a = this.tabBarEl) == null ? void 0 : _a.querySelectorAll(".wb-tab").forEach((b) => b.removeClass("active"));
     (_c = (_b = this.tabBarEl) == null ? void 0 : _b.querySelector(`.wb-tab[data-tab="${id}"]`)) == null ? void 0 : _c.addClass("active");
     Object.values(this.tabContents).forEach((c) => {
@@ -984,6 +1033,126 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     (_e = this.tabContents[id]) == null ? void 0 : _e.body.addClass("active");
     (_f = this.showTabSearchFn) == null ? void 0 : _f.call(this);
     (_g = this.updateShadowFn) == null ? void 0 : _g.call(this);
+    this.updateBookmarkHeaderButtons();
+  }
+  // ─── Bookmarks ───────────────────────────────────────────────────────────
+  /** The header's Bookmarks button: opens the Bookmarks view, or goes back to the last section if it's already open. */
+  toggleBookmarksView() {
+    const target = this.activeTab === "bookmarks" ? this.lastSectionTab : "bookmarks";
+    this.switchTab(target);
+    this.recordNav(target, null);
+  }
+  updateBookmarkHeaderButtons() {
+    const open = this.activeTab === "bookmarks";
+    for (const btn of this.bookmarkHeaderButtons) {
+      btn.classList.toggle("is-active", open);
+      btn.setAttribute("aria-pressed", String(open));
+      btn.setAttribute("aria-label", open ? "Close bookmarks" : "Bookmarks");
+    }
+  }
+  syncBookmarkToggle(btn, on) {
+    btn.classList.toggle("is-bookmarked", on);
+    btn.setAttribute("aria-pressed", String(on));
+    btn.setAttribute("aria-label", on ? "Remove bookmark" : "Add bookmark");
+  }
+  /** Adds or removes one note from the bookmarks, updating every expanded copy of its card. */
+  async toggleBookmark(path) {
+    const settings = this.plugin.settings;
+    const on = !settings.bookmarks.includes(path);
+    settings.bookmarks = on ? [...settings.bookmarks, path] : settings.bookmarks.filter((p) => p !== path);
+    this.containerEl.querySelectorAll(".wb-bookmark-toggle").forEach((btn) => {
+      if (btn.getAttribute("data-bookmark-path") === path) this.syncBookmarkToggle(btn, on);
+    });
+    this.renderBookmarks();
+    await this.plugin.saveSettings();
+  }
+  /**
+   * Draws the Bookmarks view's list: bookmarked entries grouped under collapsible section headers
+   * (Characters, Locations, ...), each card drawn exactly as on its own tab. Each group can be
+   * dragged into its own order, saved back into the single bookmarks list.
+   */
+  renderBookmarks() {
+    var _a;
+    const pane = this.tabContents.bookmarks;
+    if (!pane) return;
+    const container = pane.body;
+    const tab = "bookmarks";
+    const wasExpanded = new Set(
+      Array.from(container.querySelectorAll(".wb-card.wb-card-expanded")).map(
+        (c) => {
+          var _a2;
+          return (_a2 = c.getAttribute("data-path")) != null ? _a2 : "";
+        }
+      )
+    );
+    const scrollEl = this.activeTab === tab ? container.closest(".wb-scroll") : null;
+    const scrollTop = (_a = scrollEl == null ? void 0 : scrollEl.scrollTop) != null ? _a : 0;
+    container.empty();
+    const entries = this.plugin.settings.bookmarks.map((path) => this.entryByPath.get(path)).filter((e) => !!e);
+    if (entries.length === 0) {
+      container.createDiv("wb-list").createDiv({
+        cls: "wb-empty",
+        text: "No bookmarks yet. Expand an entry and click its bookmark icon to add it here."
+      });
+      this.applySearch(tab);
+      return;
+    }
+    for (const section of SECTION_TABS) {
+      const cfg = this.sectionConfigs[section];
+      const items = entries.filter((e) => this.findEntryTab(e.file) === section);
+      if (!cfg || items.length === 0) continue;
+      const header = container.createDiv("wb-group-header");
+      header.setAttribute("role", "button");
+      header.setAttribute("tabindex", "0");
+      (0, import_obsidian.setIcon)(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
+      header.createEl("span", { cls: "wb-group-title", text: SECTION_LABELS[section] });
+      const list = container.createDiv("wb-list");
+      const applyCollapsed = (collapsed) => {
+        header.classList.toggle("is-collapsed", collapsed);
+        list.classList.toggle("is-collapsed", collapsed);
+        header.setAttribute("aria-expanded", String(!collapsed));
+      };
+      applyCollapsed(this.plugin.settings.collapsedBookmarkGroups.includes(section));
+      const toggleCollapsed = async () => {
+        if (normalizeForSearch(this.searchQueries[tab]).trim()) return;
+        const settings = this.plugin.settings;
+        const collapse = !settings.collapsedBookmarkGroups.includes(section);
+        settings.collapsedBookmarkGroups = collapse ? [...settings.collapsedBookmarkGroups, section] : settings.collapsedBookmarkGroups.filter((k) => k !== section);
+        applyCollapsed(collapse);
+        await this.plugin.saveSettings();
+      };
+      header.onclick = toggleCollapsed;
+      header.onkeydown = (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          toggleCollapsed();
+        }
+      };
+      for (const entry of items) this.renderCard(tab, list, entry, cfg.getCard, cfg.thumbs, cfg.stackBadge, true);
+      this.enableReorder(list, async (order) => {
+        const settings = this.plugin.settings;
+        const kept = order.filter((p) => settings.bookmarks.includes(p));
+        settings.bookmarks = mergeGroupOrder(settings.bookmarks, items.map((e) => e.file.path), kept);
+        await this.plugin.saveSettings();
+      });
+    }
+    this.createNoResultsLine(container, "Bookmarks");
+    this.applySearch(tab);
+    if (wasExpanded.size) {
+      this.restoringNav = true;
+      try {
+        container.querySelectorAll(".wb-card").forEach((card) => {
+          var _a2;
+          const path = (_a2 = card.getAttribute("data-path")) != null ? _a2 : "";
+          const entry = this.entryByPath.get(path);
+          if (entry && wasExpanded.has(path)) this.toggleCardExpand(tab, card, entry);
+        });
+      } finally {
+        this.restoringNav = false;
+      }
+    }
+    if (scrollEl) scrollEl.scrollTop = scrollTop;
+    this.refreshCurrentCardHighlight();
   }
   /**
    * Records where the sidebar is now pointed (which tab, and which card - if any - is the one the
@@ -1662,7 +1831,19 @@ var WorldBuilderPlugin = class extends import_obsidian.Plugin {
             changed = true;
           }
         }
+        const b = this.settings.bookmarks.indexOf(oldPath);
+        if (b !== -1) {
+          this.settings.bookmarks[b] = file.path;
+          changed = true;
+        }
         if (changed) await this.saveSettings();
+      })
+    );
+    this.registerEvent(
+      this.app.vault.on("delete", async (file) => {
+        if (!this.settings.bookmarks.includes(file.path)) return;
+        this.settings.bookmarks = this.settings.bookmarks.filter((p) => p !== file.path);
+        await this.saveSettings();
       })
     );
     this.addSettingTab(new WorldBuilderSettingTab(this.app, this));
@@ -1684,7 +1865,7 @@ var WorldBuilderPlugin = class extends import_obsidian.Plugin {
     }
   }
   async loadSettings() {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f, _g;
     const data = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
     this.settings.characterOrder = (_a = data == null ? void 0 : data.characterOrder) != null ? _a : {};
@@ -1692,6 +1873,8 @@ var WorldBuilderPlugin = class extends import_obsidian.Plugin {
     this.settings.collapsedEmployerTypes = (_c = data == null ? void 0 : data.collapsedEmployerTypes) != null ? _c : [];
     this.settings.collapsedParents = (_d = data == null ? void 0 : data.collapsedParents) != null ? _d : [];
     this.settings.sectionOrder = (_e = data == null ? void 0 : data.sectionOrder) != null ? _e : {};
+    this.settings.bookmarks = (_f = data == null ? void 0 : data.bookmarks) != null ? _f : [];
+    this.settings.collapsedBookmarkGroups = (_g = data == null ? void 0 : data.collapsedBookmarkGroups) != null ? _g : [];
   }
   async saveSettings() {
     await this.saveData(this.settings);

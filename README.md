@@ -12,6 +12,7 @@ A fiction world-building toolkit for Obsidian: characters, locations, employers,
 - **Lore Entries** — title, category (history/tech/religion/culture/other), content
 - **Timeline Events** — date/era, title, description, linked characters/locations
 - **World Sidebar** — tabbed view across all five entry types
+- **Bookmarks** — bookmark any entry from its expanded view, and open them all from the Bookmarks button in the section header
 - **Search** — a search bar pinned under the section header on every tab (each tab keeps its own text); type to hide whatever doesn't match, all words must match. Characters are matched on name, employer, ship and home; the other tabs on the name and the text of the note
 
 ## Settings
@@ -56,7 +57,8 @@ Everything below was added or changed in this fork (by liamhatherton), compiled 
 21. **Back/Forward navigation.** Back and forward buttons in the section header step through a history of tab switches and expanded cards. The current card gets an accent border.
 22. **Wiki links inside the sidebar.** Clicking a `[[link]]` in an expanded preview jumps to that entry's card: it switches tab, opens collapsed groups, clears a hiding search, then expands and scrolls to the card. Links outside the world folder open normally.
 23. **Reload button** in the section header, to redraw the sidebar on demand.
+24. **Bookmarks.** Every expanded entry has a bookmark button on the left of its footer (opposite Edit); it turns the accent color when the entry is bookmarked. A Bookmarks button to the left of Reload in each section header swaps the list for a Bookmarks view, with bookmarked entries grouped by section (collapsible and drag-to-reorder). Clicking the button again returns to the last section. Bookmarks are kept in plugin data and follow renames.
 
 ### Branding
 
-24. **Rebranded as "Hatherton's World Builder"** with a new plugin ID (`world-builder-lh`), author, description and package name, and an orbit icon for the ribbon and sidebar instead of the globe. Credit to the original author, wesswart77, is kept.
+25. **Rebranded as "Hatherton's World Builder"** with a new plugin ID (`world-builder-lh`), author, description and package name, and an orbit icon for the ribbon and sidebar instead of the globe. Credit to the original author, wesswart77, is kept.
