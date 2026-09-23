@@ -15,3 +15,46 @@ A fiction world-building toolkit for Obsidian: characters, locations, employers,
 ## Settings
 
 - **World folder** — where all world-building notes are stored (default: `World`)
+
+## Changes from upstream
+
+Everything below was added or changed in this fork (by liamhatherton), compiled from the commit history.
+
+### Sci-fi setting and data model
+
+1. **Factions renamed to Employers.** The tab, folder (`World/Employers`), "New Employer" command and modal, and the character `employer` field all replace the old faction wording.
+2. **"Magic" lore category renamed to "Tech".**
+3. **New location types:** planet, dwarf planet, moon, station, asteroid, belt and ship, alongside the original city/region/building/landmark/other.
+4. **Optional Ship and Home fields on characters.** Both are in the New Character form and written to the note's frontmatter.
+5. **Employer types.** Employers get a Type dropdown (Corporation, Government, Criminal), saved to frontmatter and shown in the note body.
+6. **New character note template.** Colored section headings (Origin, Physical Description, Occupation, Resume, Role In Story, Goals, Personality, Habits/Mannerisms, Earlier Life, Internal Conflicts, External Conflicts). Text entered in the form goes under its heading and the rest are left empty to fill in later. The Secrets field was removed.
+
+### Sidebar cards
+
+7. **Character portraits.** Each character card shows a thumbnail of the first image embedded in the note (wiki or markdown embeds, local files or image URLs). Portrait and border sizes were adjusted afterwards.
+8. **Thumbnails for Locations and Employers**, the same way as characters.
+9. **Clearer character card details.** Two labelled lines, "Age · Home" then "Employer · Ship". Empty values are left out and the role badge sits on its own line.
+10. **Expandable cards.** Clicking a card expands a text-only preview of the note inside the sidebar instead of opening it. The preview leaves out frontmatter, images and the repeated title heading, and has an Edit button to open the note.
+11. **Frontmatter values with quotes are read correctly.** Quoted values (`"..."` / `'...'`) are unquoted before they are displayed.
+
+### Organization and ordering
+
+12. **Characters grouped by employer.** Each employer gets a collapsible section, sorted alphabetically with "No Employer" last. Collapsed state is remembered.
+13. **Employer logos on character group headers.** The logo is the first image in the matching employer note.
+14. **Drag-and-drop ordering.** Cards can be dragged into a custom order. This started with characters (within their employer group) and now covers every tab. The order is saved in plugin data (notes are never modified) and still applies after a note is renamed.
+15. **Hierarchical Locations tab.** Locations nest under their `parent` location (plain names and `[[wiki links]]` both work, and cycles are ignored). Each level can be reordered separately, and dragging a parent moves its whole subtree with it.
+16. **Collapsible location tree.** Every location has a collapsible label, and collapsing a parent hides its subtree. Nested labels keep their own saved state.
+17. **Ships section.** Ship-type locations are never nested because they move around. They get their own collapsible Ships section at the bottom of Locations.
+18. **Employers grouped by type** into collapsible Corporation / Government / Criminal / Unassigned sections, each with its own drag-to-reorder list.
+
+### Navigation and search
+
+19. **Fixed sidebar header.** The title, tabs, section header and search bar stay put while the list below scrolls, with a shadow when the list is scrolled. Scroll position is kept across redraws.
+20. **Improved search.** The search bar sits under each tab's section header, and each tab keeps its own query. Every word typed must match, ignoring case and accents. Characters match on name, employer, ship and home, and the other tabs on the name plus the note text. Non-matching cards and empty groups are hidden, a "No … match" line appears when nothing matches, and Esc or the clear button resets the search. On Locations, the parents of a matching entry stay visible.
+21. **Back/Forward navigation.** Back and forward buttons in the section header step through a history of tab switches and expanded cards. The current card gets an accent border.
+22. **Wiki links inside the sidebar.** Clicking a `[[link]]` in an expanded preview jumps to that entry's card: it switches tab, opens collapsed groups, clears a hiding search, then expands and scrolls to the card. Links outside the world folder open normally.
+23. **Reload button** in the section header, to redraw the sidebar on demand.
+
+### Branding
+
+24. **Rebranded as "Hatherton's World Builder"** with a new plugin ID (`world-builder-lh`), author, description and package name, and an orbit icon for the ribbon and sidebar instead of the globe. Credit to the original author, wesswart77, is kept.
