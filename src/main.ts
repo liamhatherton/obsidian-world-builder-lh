@@ -947,15 +947,17 @@ class WorldBuilderView extends ItemView {
 		const ordered = this.orderEntries(groupEntries, this.plugin.settings.sectionOrder[tab] ?? []);
 		for (const entry of ordered) {
 			const kids = childrenOf.get(entry.file.path);
-			const hasKids = !!(kids && kids.length);
-			// Parents get an Employers-style collapsible label right above their card.
-			const header = hasKids ? this.createTreeHeader(list, getCard(entry.fm).title) : null;
+			// Every entry gets an Employers-style collapsible label right above its card. For a
+			// parent it hides the card and its whole subtree; for a leaf it hides just the card.
+			const header = this.createTreeHeader(list, getCard(entry.fm).title);
 			const card = this.renderCard(tab, list, entry, getCard, thumbs, stackBadge, expandable);
-			if (header && kids) {
+			const parts: HTMLElement[] = [card];
+			if (kids && kids.length) {
 				const childHost = list.createDiv("wb-child-group");
 				this.renderHierarchicalGroup(tab, childHost, kids, allEntries, childrenOf, getCard, thumbs, stackBadge, expandable);
-				this.wireTreeCollapse(tab, header, [card, childHost], entry.file.path);
+				parts.push(childHost);
 			}
+			this.wireTreeCollapse(tab, header, parts, entry.file.path);
 		}
 		this.enableReorder(list, async (order) => {
 			const settings = this.plugin.settings;
@@ -966,7 +968,7 @@ class WorldBuilderView extends ItemView {
 		});
 	}
 
-	/** A collapsible label (chevron + name) drawn above a hierarchical parent's card. */
+	/** A collapsible label (chevron + name) drawn above every hierarchical entry's card. */
 	private createTreeHeader(list: HTMLElement, title: string): HTMLElement {
 		const header = list.createDiv("wb-group-header wb-tree-header");
 		header.setAttribute("role", "button");

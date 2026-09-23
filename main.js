@@ -791,14 +791,15 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     const ordered = this.orderEntries(groupEntries, (_a = this.plugin.settings.sectionOrder[tab]) != null ? _a : []);
     for (const entry of ordered) {
       const kids = childrenOf.get(entry.file.path);
-      const hasKids = !!(kids && kids.length);
-      const header = hasKids ? this.createTreeHeader(list, getCard(entry.fm).title) : null;
+      const header = this.createTreeHeader(list, getCard(entry.fm).title);
       const card = this.renderCard(tab, list, entry, getCard, thumbs, stackBadge, expandable);
-      if (header && kids) {
+      const parts = [card];
+      if (kids && kids.length) {
         const childHost = list.createDiv("wb-child-group");
         this.renderHierarchicalGroup(tab, childHost, kids, allEntries, childrenOf, getCard, thumbs, stackBadge, expandable);
-        this.wireTreeCollapse(tab, header, [card, childHost], entry.file.path);
+        parts.push(childHost);
       }
+      this.wireTreeCollapse(tab, header, parts, entry.file.path);
     }
     this.enableReorder(list, async (order) => {
       var _a2;
@@ -809,7 +810,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       await this.plugin.saveSettings();
     });
   }
-  /** A collapsible label (chevron + name) drawn above a hierarchical parent's card. */
+  /** A collapsible label (chevron + name) drawn above every hierarchical entry's card. */
   createTreeHeader(list, title) {
     const header = list.createDiv("wb-group-header wb-tree-header");
     header.setAttribute("role", "button");
