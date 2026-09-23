@@ -1388,6 +1388,7 @@ var CharacterModal = class extends import_obsidian.Modal {
       ["protagonist", "antagonist", "supporting", "minor"].forEach(
         (o) => d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
       );
+      d.setValue(this.data.role);
       d.onChange((v) => this.data.role = v);
     });
     new import_obsidian.Setting(contentEl).setName("Age").addText((t) => {
@@ -1474,7 +1475,7 @@ var LocationModal = class extends import_obsidian.Modal {
     super(app);
     this.data = {
       name: "",
-      type: "city",
+      type: "planet",
       parent: "",
       description: "",
       inhabitants: "",
@@ -1494,6 +1495,7 @@ var LocationModal = class extends import_obsidian.Modal {
       ["planet", "dwarf planet", "moon", "station", "asteroid", "belt", "ship", "city", "region", "building", "landmark", "other"].forEach(
         (o) => d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
       );
+      d.setValue(this.data.type);
       d.onChange((v) => this.data.type = v);
     });
     new import_obsidian.Setting(contentEl).setName("Parent Location").addText((t) => {
@@ -1583,6 +1585,7 @@ var EmployerModal = class extends import_obsidian.Modal {
       ["lawful", "neutral", "chaotic"].forEach(
         (o) => d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
       );
+      d.setValue(this.data.alignment);
       d.onChange((v) => this.data.alignment = v);
     });
     new import_obsidian.Setting(contentEl).setName("Goals").addTextArea((t) => {
@@ -1657,6 +1660,7 @@ var LoreModal = class extends import_obsidian.Modal {
       ["history", "tech", "religion", "culture", "other"].forEach(
         (o) => d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
       );
+      d.setValue(this.data.category);
       d.onChange((v) => this.data.category = v);
     });
     new import_obsidian.Setting(contentEl).setName("Content").addTextArea((t) => {

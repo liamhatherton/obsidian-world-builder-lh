@@ -1636,6 +1636,7 @@ class CharacterModal extends Modal {
 			["protagonist", "antagonist", "supporting", "minor"].forEach((o) =>
 				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
 			);
+			d.setValue(this.data.role);
 			d.onChange((v) => (this.data.role = v));
 		});
 		new Setting(contentEl).setName("Age").addText((t) => {
@@ -1722,7 +1723,7 @@ class LocationModal extends Modal {
 	plugin: WorldBuilderPlugin;
 	onDone: () => void;
 	data = {
-		name: "", type: "city", parent: "", description: "",
+		name: "", type: "planet", parent: "", description: "",
 		inhabitants: "", secrets: ""
 	};
 
@@ -1744,6 +1745,7 @@ class LocationModal extends Modal {
 			["planet", "dwarf planet", "moon", "station", "asteroid", "belt", "ship", "city", "region", "building", "landmark", "other"].forEach((o) =>
 				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
 			);
+			d.setValue(this.data.type);
 			d.onChange((v) => (this.data.type = v));
 		});
 		new Setting(contentEl).setName("Parent Location").addText((t) => {
@@ -1831,6 +1833,7 @@ class EmployerModal extends Modal {
 			["lawful", "neutral", "chaotic"].forEach((o) =>
 				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
 			);
+			d.setValue(this.data.alignment);
 			d.onChange((v) => (this.data.alignment = v));
 		});
 		new Setting(contentEl).setName("Goals").addTextArea((t) => {
@@ -1908,6 +1911,7 @@ class LoreModal extends Modal {
 			["history", "tech", "religion", "culture", "other"].forEach((o) =>
 				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
 			);
+			d.setValue(this.data.category);
 			d.onChange((v) => (this.data.category = v));
 		});
 		new Setting(contentEl).setName("Content").addTextArea((t) => {
