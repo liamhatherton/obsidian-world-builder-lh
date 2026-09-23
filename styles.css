@@ -364,7 +364,7 @@
 	color: var(--tag-color);
 	margin-left: 4px;
 }
-.wb-card-badge-row { margin-bottom: 3px; }
+.wb-card-badge-row { margin-bottom: 3px; gap: 4px; }
 .wb-card-badge-row .wb-badge { margin-left: 0; }
 
 /* Character cards: tighter name -> role spacing */
@@ -379,6 +379,7 @@
 .wb-badge-lawful      { background: #2d5a8e33; color: #5b9bd5; }
 .wb-badge-neutral     { background: #5a5a2d33; color: #c9a84c; }
 .wb-badge-chaotic     { background: #8e2d2d33; color: #e07070; }
+.wb-badge-pov         { background: #8e2d6a33; color: #f06fb4; }
 
 .wb-empty {
 	color: var(--text-muted);
@@ -476,7 +477,7 @@
 
 /* ─── Bookmarks ─────────────────────────────────────────────────────────── */
 
-/* Icon-only buttons: the header's Bookmarks button and the bookmark toggle in an expanded card.
+/* Icon-only buttons: the title row's Bookmarks button and the bookmark toggle in an expanded card.
    Stretched to the height of the text button beside them (Reload / Edit). */
 .wb-icon-btn {
 	justify-content: center;
@@ -487,6 +488,8 @@
 }
 .wb-icon-btn:hover { color: var(--text-normal); }
 .wb-icon-btn svg { width: 14px; height: 14px; }
+/* In the title row there's no text button to match, so keep it centered beside the title. */
+.wb-header .wb-bookmarks-btn { align-self: center; flex-shrink: 0; }
 
 /* Toggled on (entry bookmarked / Bookmarks view open): accent-colored, filled bookmark. */
 .wb-icon-btn.is-bookmarked,

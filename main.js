@@ -110,6 +110,7 @@ function documentSearchText(content, fm) {
   const values = Object.entries(fm).filter(([key]) => key !== "entry_type").map(([, value]) => value);
   return [...values, body].join(" ");
 }
+var hasValue = (v) => v !== void 0 && v !== null && !(typeof v === "string" && v.trim() === "");
 var SECTION_TABS = ["characters", "locations", "employers", "lore", "timeline"];
 var SECTION_LABELS = {
   characters: "Characters",
@@ -194,7 +195,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     this.lastSectionTab = "characters";
     /** How each section draws its cards, captured in renderSection() so the Bookmarks view can draw them the same way. */
     this.sectionConfigs = {};
-    /** The Bookmarks button in every section header, highlighted while the Bookmarks view is open. */
+    /** The Bookmarks button in the title row, highlighted while the Bookmarks view is open. */
     this.bookmarkHeaderButtons = [];
     this.searchTargets = {};
     /** Normalised text each card is matched against. */
@@ -253,6 +254,13 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     const scroll = containerEl.createDiv("wb-scroll");
     const header = fixed.createDiv("wb-header");
     header.createEl("h2", { text: "Hatherton's World Builder" });
+    const bookmarksBtn = header.createEl("button", {
+      cls: "wb-btn-secondary wb-icon-btn wb-bookmarks-btn",
+      attr: { type: "button", "aria-label": "Bookmarks" }
+    });
+    (0, import_obsidian.setIcon)(bookmarksBtn, "bookmark");
+    bookmarksBtn.onclick = () => this.toggleBookmarksView();
+    this.bookmarkHeaderButtons.push(bookmarksBtn);
     const tabBar = fixed.createDiv("wb-tabs");
     const tabs = [
       { id: "characters", label: "Characters" },
@@ -357,6 +365,8 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
             labeledLine([["Employer", fm.employer], ["Ship", fm.ship]])
           ].filter(Boolean).join("\n"),
           badge: (_b2 = fm.role) != null ? _b2 : "",
+          // `pov` is set by hand in the note's properties (not in the New Character modal).
+          extraBadges: hasValue(fm.pov) ? [{ text: "POV", cls: "wb-badge-pov" }] : [],
           // What the search bar matches against.
           search: [fm.name, fm.employer, fm.ship, fm.home].filter(Boolean).join(" ")
         };
@@ -716,8 +726,8 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     this.createNoResultsLine(container, label);
   }
   /**
-   * A tab's section header (fixed region): Back/Forward and the label on the left; Bookmarks,
-   * Reload and (for the entry sections) + New on the right.
+   * A tab's section header (fixed region): Back/Forward and the label on the left; Reload and
+   * (for the entry sections) + New on the right. (The Bookmarks button lives in the title row.)
    */
   renderSectionHeader(pane, label, onCreate, reload) {
     const hdr = pane.head.createDiv("wb-section-header");
@@ -738,13 +748,6 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     this.navButtons.push({ back: backBtn, fwd: fwdBtn });
     titleGroup.createEl("span", { text: label });
     const actions = hdr.createDiv("wb-section-actions");
-    const bookmarksBtn = actions.createEl("button", {
-      cls: "wb-btn-secondary wb-icon-btn wb-bookmarks-btn",
-      attr: { type: "button", "aria-label": "Bookmarks" }
-    });
-    (0, import_obsidian.setIcon)(bookmarksBtn, "bookmark");
-    bookmarksBtn.onclick = () => this.toggleBookmarksView();
-    this.bookmarkHeaderButtons.push(bookmarksBtn);
     if (reload) {
       const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary" });
       (0, import_obsidian.setIcon)(reloadBtn.createEl("span", { cls: "wb-btn-icon" }), "refresh-cw");
@@ -911,7 +914,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
   }
   renderCard(tab, parent, entry, getCard, thumbs, stackBadge, expandable) {
     const { file, content, fm } = entry;
-    const { title, meta, badge, search } = getCard(fm);
+    const { title, meta, badge, search, extraBadges } = getCard(fm);
     const card = parent.createDiv("wb-card");
     if (stackBadge) card.addClass("wb-card-stacked");
     card.setAttribute("data-path", file.path);
@@ -931,10 +934,14 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     const titleEl = body.createDiv("wb-card-title");
     titleEl.createSpan({ text: title });
     if (expandable) titleEl.addClass("wb-card-title-row");
-    if (badge) {
+    const extras = extraBadges != null ? extraBadges : [];
+    if (badge || extras.length) {
       const badgeHost = stackBadge ? body.createDiv("wb-card-badge-row") : titleEl;
-      const b = badgeHost.createSpan({ cls: `wb-badge wb-badge-${badge.toLowerCase()}` });
-      b.setText(badge);
+      if (badge) {
+        const b = badgeHost.createSpan({ cls: `wb-badge wb-badge-${badge.toLowerCase()}` });
+        b.setText(badge);
+      }
+      for (const extra of extras) badgeHost.createSpan({ cls: `wb-badge ${extra.cls}`, text: extra.text });
     }
     if (expandable) (0, import_obsidian.setIcon)(titleEl.createSpan({ cls: "wb-card-chevron" }), "chevron-right");
     if (meta) for (const line of meta.split("\n")) body.createDiv({ cls: "wb-card-meta", text: line });
@@ -1036,7 +1043,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     this.updateBookmarkHeaderButtons();
   }
   // ─── Bookmarks ───────────────────────────────────────────────────────────
-  /** The header's Bookmarks button: opens the Bookmarks view, or goes back to the last section if it's already open. */
+  /** The title row's Bookmarks button: opens the Bookmarks view, or goes back to the last section if it's already open. */
   toggleBookmarksView() {
     const target = this.activeTab === "bookmarks" ? this.lastSectionTab : "bookmarks";
     this.switchTab(target);

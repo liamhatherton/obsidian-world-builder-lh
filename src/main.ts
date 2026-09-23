@@ -185,7 +185,18 @@ interface NoteEntry {
 /** One tab's two halves: header (fixed region) and body (scrolling region). */
 interface TabPane { head: HTMLElement; body: HTMLElement; }
 
-type CardFn = (fm: Record<string, string>) => { title: string; meta: string; badge: string; search?: string };
+type CardFn = (fm: Record<string, string>) => {
+	title: string;
+	meta: string;
+	badge: string;
+	search?: string;
+	// Additional small labels drawn after the main badge (e.g. the character POV marker).
+	extraBadges?: { text: string; cls: string }[];
+};
+
+/** True when a frontmatter value is actually set (not missing, null, or blank). */
+const hasValue = (v: unknown): boolean =>
+	v !== undefined && v !== null && !(typeof v === "string" && v.trim() === "");
 
 /** The five entry sections, each with its own tab and folder. */
 type SectionTab = "characters" | "locations" | "employers" | "lore" | "timeline";
@@ -296,7 +307,7 @@ class WorldBuilderView extends ItemView {
 	private lastSectionTab: SectionTab = "characters";
 	/** How each section draws its cards, captured in renderSection() so the Bookmarks view can draw them the same way. */
 	private sectionConfigs: Partial<Record<SectionTab, { getCard: CardFn; thumbs: boolean; stackBadge: boolean }>> = {};
-	/** The Bookmarks button in every section header, highlighted while the Bookmarks view is open. */
+	/** The Bookmarks button in the title row, highlighted while the Bookmarks view is open. */
 	private bookmarkHeaderButtons: HTMLButtonElement[] = [];
 	private searchTargets: Partial<Record<WBTab, HTMLElement>> = {};
 	/** Normalised text each card is matched against. */
@@ -359,6 +370,14 @@ class WorldBuilderView extends ItemView {
 
 		const header = fixed.createDiv("wb-header");
 		header.createEl("h2", { text: "Hatherton's World Builder" });
+		// Bookmarks: icon-only, anchored to the right of the title. Highlighted while the Bookmarks view is open.
+		const bookmarksBtn = header.createEl("button", {
+			cls: "wb-btn-secondary wb-icon-btn wb-bookmarks-btn",
+			attr: { type: "button", "aria-label": "Bookmarks" },
+		});
+		setIcon(bookmarksBtn, "bookmark");
+		bookmarksBtn.onclick = () => this.toggleBookmarksView();
+		this.bookmarkHeaderButtons.push(bookmarksBtn);
 
 		const tabBar = fixed.createDiv("wb-tabs");
 		const tabs: { id: SectionTab; label: string }[] = [
@@ -389,8 +408,8 @@ class WorldBuilderView extends ItemView {
 			contents[id] = pane;
 			this.searchTargets[id] = pane.body;
 		});
-		// The Bookmarks view has no tab of its own; it's opened from the Bookmarks button in each
-		// section header and takes the place of the section's list while it's open.
+		// The Bookmarks view has no tab of its own; it's opened from the Bookmarks button in the
+		// title row and takes the place of the section's list while it's open.
 		const bookmarksPane: TabPane = {
 			head: fixed.createDiv("wb-tab-content wb-tab-head"),
 			body: scroll.createDiv("wb-tab-content wb-tab-body wb-bookmarks-body"),
@@ -465,6 +484,8 @@ class WorldBuilderView extends ItemView {
 					labeledLine([["Employer", fm.employer], ["Ship", fm.ship]]),
 				].filter(Boolean).join("\n"),
 				badge: fm.role ?? "",
+				// `pov` is set by hand in the note's properties (not in the New Character modal).
+				extraBadges: hasValue(fm.pov) ? [{ text: "POV", cls: "wb-badge-pov" }] : [],
 				// What the search bar matches against.
 				search: [fm.name, fm.employer, fm.ship, fm.home].filter(Boolean).join(" "),
 			}),
@@ -681,7 +702,7 @@ class WorldBuilderView extends ItemView {
 		folderPath: string,
 		label: string,
 		onCreate: () => void,
-		getCard: (fm: Record<string, string>) => { title: string; meta: string; badge: string },
+		getCard: CardFn,
 		opts: {
 			thumbs?: boolean;
 			reload?: boolean;
@@ -854,8 +875,8 @@ class WorldBuilderView extends ItemView {
 	}
 
 	/**
-	 * A tab's section header (fixed region): Back/Forward and the label on the left; Bookmarks,
-	 * Reload and (for the entry sections) + New on the right.
+	 * A tab's section header (fixed region): Back/Forward and the label on the left; Reload and
+	 * (for the entry sections) + New on the right. (The Bookmarks button lives in the title row.)
 	 */
 	private renderSectionHeader(pane: TabPane, label: string, onCreate: (() => void) | null, reload: boolean) {
 		const hdr = pane.head.createDiv("wb-section-header");
@@ -877,14 +898,6 @@ class WorldBuilderView extends ItemView {
 		this.navButtons.push({ back: backBtn, fwd: fwdBtn });
 		titleGroup.createEl("span", { text: label });
 		const actions = hdr.createDiv("wb-section-actions");
-		// Bookmarks: icon-only, just left of Reload. Highlighted while the Bookmarks view is open.
-		const bookmarksBtn = actions.createEl("button", {
-			cls: "wb-btn-secondary wb-icon-btn wb-bookmarks-btn",
-			attr: { type: "button", "aria-label": "Bookmarks" },
-		});
-		setIcon(bookmarksBtn, "bookmark");
-		bookmarksBtn.onclick = () => this.toggleBookmarksView();
-		this.bookmarkHeaderButtons.push(bookmarksBtn);
 		if (reload) {
 			const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary" });
 			setIcon(reloadBtn.createEl("span", { cls: "wb-btn-icon" }), "refresh-cw");
@@ -1095,7 +1108,7 @@ class WorldBuilderView extends ItemView {
 		expandable: boolean
 	): HTMLElement {
 		const { file, content, fm } = entry;
-		const { title, meta, badge, search } = getCard(fm);
+		const { title, meta, badge, search, extraBadges } = getCard(fm);
 
 		const card = parent.createDiv("wb-card");
 		if (stackBadge) card.addClass("wb-card-stacked");
@@ -1120,11 +1133,15 @@ class WorldBuilderView extends ItemView {
 		const titleEl = body.createDiv("wb-card-title");
 		titleEl.createSpan({ text: title });
 		if (expandable) titleEl.addClass("wb-card-title-row");
-		if (badge) {
+		const extras = extraBadges ?? [];
+		if (badge || extras.length) {
 			// stackBadge: badge on its own line under the name; otherwise inline beside it
 			const badgeHost = stackBadge ? body.createDiv("wb-card-badge-row") : titleEl;
-			const b = badgeHost.createSpan({ cls: `wb-badge wb-badge-${badge.toLowerCase()}` });
-			b.setText(badge);
+			if (badge) {
+				const b = badgeHost.createSpan({ cls: `wb-badge wb-badge-${badge.toLowerCase()}` });
+				b.setText(badge);
+			}
+			for (const extra of extras) badgeHost.createSpan({ cls: `wb-badge ${extra.cls}`, text: extra.text });
 		}
 		// Added last so it's always the rightmost element in the title row, after any inline badge.
 		if (expandable) setIcon(titleEl.createSpan({ cls: "wb-card-chevron" }), "chevron-right");
@@ -1245,7 +1262,7 @@ class WorldBuilderView extends ItemView {
 
 	// ─── Bookmarks ───────────────────────────────────────────────────────────
 
-	/** The header's Bookmarks button: opens the Bookmarks view, or goes back to the last section if it's already open. */
+	/** The title row's Bookmarks button: opens the Bookmarks view, or goes back to the last section if it's already open. */
 	private toggleBookmarksView() {
 		const target: WBTab = this.activeTab === "bookmarks" ? this.lastSectionTab : "bookmarks";
 		this.switchTab(target);
