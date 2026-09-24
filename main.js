@@ -36,6 +36,7 @@ var DEFAULT_SETTINGS = {
 var EMPLOYER_TYPES = [
   { key: "corporation", label: "Corporation" },
   { key: "government", label: "Government" },
+  { key: "military", label: "Military" },
   { key: "criminal", label: "Criminal" }
 ];
 function slugify(s) {
@@ -62,6 +63,74 @@ function stripGraphics(markdown) {
     const target = inner.split("|")[0].split("#")[0].trim();
     return IMG_EXT.test(target) ? "" : match;
   }).replace(/!\[[^\]]*\]\((?:<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\)/g, "").replace(/<img\b[^>]*\/?>/gi, "");
+}
+function openImageZoom(src, alt) {
+  var _a;
+  (_a = document.querySelector(".wb-zoom-overlay")) == null ? void 0 : _a.remove();
+  const overlay = document.body.createDiv({ cls: "wb-zoom-overlay", attr: { role: "dialog", "aria-modal": "true", "aria-label": alt || "Image" } });
+  const img = overlay.createEl("img", { cls: "wb-zoom-img", attr: { src, alt, draggable: "false" } });
+  let scale = 1;
+  let x = 0;
+  let y = 0;
+  const apply = () => {
+    img.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+    overlay.toggleClass("is-zoomed", scale > 1);
+  };
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener("keydown", onKey, true);
+  };
+  const onKey = (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    }
+  };
+  document.addEventListener("keydown", onKey, true);
+  overlay.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const prev = scale;
+    scale = Math.min(10, Math.max(1, scale * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+    if (scale === 1) {
+      x = 0;
+      y = 0;
+    } else {
+      const cx = e.clientX - window.innerWidth / 2;
+      const cy = e.clientY - window.innerHeight / 2;
+      x = cx - (cx - x) * scale / prev;
+      y = cy - (cy - y) * scale / prev;
+    }
+    apply();
+  }, { passive: false });
+  let dragStart = null;
+  let moved = false;
+  overlay.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    dragStart = { mx: e.clientX, my: e.clientY, x, y };
+    moved = false;
+    overlay.setPointerCapture(e.pointerId);
+  });
+  overlay.addEventListener("pointermove", (e) => {
+    if (!dragStart) return;
+    const dx = e.clientX - dragStart.mx;
+    const dy = e.clientY - dragStart.my;
+    if (!moved && Math.hypot(dx, dy) < 4) return;
+    moved = true;
+    if (scale > 1) {
+      overlay.addClass("is-panning");
+      x = dragStart.x + dx;
+      y = dragStart.y + dy;
+      apply();
+    }
+  });
+  overlay.addEventListener("pointerup", () => {
+    overlay.removeClass("is-panning");
+    const wasClick = dragStart && !moved;
+    dragStart = null;
+    if (wasClick) close();
+  });
+  img.onerror = close;
 }
 async function ensureFolder(app, path) {
   if (!app.vault.getAbstractFileByPath(path)) {
@@ -763,7 +832,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     }
   }
   /**
-   * Employers: one collapsible sub-section per `type` property (Corporation, Government, then Criminal),
+   * Employers: one collapsible sub-section per `type` property (Corporation, Government, Military, then Criminal),
    * with employers that have no recognised type in an "Unassigned" section last. Headers use the
    * same chevron as the Characters employer groups, without a logo. Each section is its own
    * drag-to-reorder list; its order is merged back into the tab's single saved order.
@@ -927,7 +996,20 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       const src = this.findFirstImageSrc(content, file);
       if (src) {
         const img = thumb.createEl("img", { attr: { src, alt: "", draggable: "false" } });
-        img.onerror = () => img.remove();
+        thumb.addClass("wb-thumb-has-img");
+        const zoomBadge = thumb.createSpan({ cls: "wb-thumb-zoom", attr: { "aria-hidden": "true" } });
+        (0, import_obsidian.setIcon)(zoomBadge, "zoom-in");
+        img.onerror = () => {
+          img.remove();
+          zoomBadge.remove();
+          thumb.removeClass("wb-thumb-has-img");
+        };
+        thumb.addEventListener("click", (e) => {
+          if (!card.classList.contains("wb-card-expanded") || !thumb.contains(img)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          openImageZoom(src, title);
+        });
       }
       body = row.createDiv("wb-card-body");
     }

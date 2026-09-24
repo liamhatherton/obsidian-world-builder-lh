@@ -169,6 +169,62 @@
 }
 .wb-card-body { flex: 1; min-width: 0; }
 
+/*
+ * Click-to-zoom on an expanded card's photo: a magnifier badge (dark, translucent, rounded) fades
+ * in at the photo's top-right corner on hover, and clicking opens the full-screen zoom
+ * (.wb-zoom-overlay). Collapsed cards keep the photo as a plain thumbnail that just expands the card.
+ */
+.wb-thumb { position: relative; }
+.wb-card-expanded .wb-thumb.wb-thumb-has-img { cursor: zoom-in; }
+.wb-thumb-zoom {
+	position: absolute;
+	top: 4px;
+	right: 4px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	border-radius: 6px;
+	background: rgba(0, 0, 0, 0.55);
+	color: #fff;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.15s ease;
+}
+.wb-thumb-zoom svg { width: 14px; height: 14px; stroke-width: 2.25; }
+.wb-card-expanded .wb-thumb.wb-thumb-has-img:hover .wb-thumb-zoom { opacity: 1; }
+
+.wb-zoom-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: var(--layer-modal, 50);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.85);
+	cursor: zoom-out;
+	overflow: hidden;
+	animation: wb-zoom-in 0.15s ease-out;
+	touch-action: none;
+}
+.wb-zoom-overlay.is-zoomed { cursor: grab; }
+.wb-zoom-overlay.is-panning { cursor: grabbing; }
+.wb-zoom-img {
+	max-width: 95vw;
+	max-height: 95vh;
+	object-fit: contain;
+	border-radius: 4px;
+	box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+	transform-origin: center center;
+	user-select: none;
+	pointer-events: none;
+}
+@keyframes wb-zoom-in {
+	from { opacity: 0; }
+	to { opacity: 1; }
+}
+
 .wb-group-header {
 	display: flex;
 	align-items: center;

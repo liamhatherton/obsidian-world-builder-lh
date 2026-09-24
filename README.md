@@ -29,7 +29,7 @@ Everything below was added or changed in this fork (by liamhatherton), compiled 
 2. **"Magic" lore category renamed to "Tech".**
 3. **New location types:** planet, dwarf planet, moon, station, asteroid, belt and ship, alongside the original city/region/building/landmark/other.
 4. **Optional Ship and Home fields on characters.** Both are in the New Character form and written to the note's frontmatter.
-5. **Employer types.** Employers get a Type dropdown (Corporation, Government, Criminal), saved to frontmatter and shown in the note body.
+5. **Employer types.** Employers get a Type dropdown (Corporation, Government, Military, Criminal), saved to frontmatter and shown in the note body.
 6. **New character note template.** Colored section headings (Origin, Physical Description, Occupation, Resume, Role In Story, Goals, Personality, Habits/Mannerisms, Earlier Life, Internal Conflicts, External Conflicts). Text entered in the form goes under its heading and the rest are left empty to fill in later. The Secrets field was removed.
 
 ### Sidebar cards
@@ -48,7 +48,7 @@ Everything below was added or changed in this fork (by liamhatherton), compiled 
 15. **Hierarchical Locations tab.** Locations nest under their `parent` location (plain names and `[[wiki links]]` both work, and cycles are ignored). Each level can be reordered separately, and dragging a parent moves its whole subtree with it.
 16. **Collapsible location tree.** Every location has a collapsible label, and collapsing a parent hides its subtree. Nested labels keep their own saved state.
 17. **Ships section.** Ship-type locations are never nested because they move around. They get their own collapsible Ships section at the bottom of Locations.
-18. **Employers grouped by type** into collapsible Corporation / Government / Criminal / Unassigned sections, each with its own drag-to-reorder list.
+18. **Employers grouped by type** into collapsible Corporation / Government / Military / Criminal / Unassigned sections, each with its own drag-to-reorder list.
 
 ### Navigation and search
 
@@ -58,7 +58,8 @@ Everything below was added or changed in this fork (by liamhatherton), compiled 
 22. **Wiki links inside the sidebar.** Clicking a `[[link]]` in an expanded preview jumps to that entry's card: it switches tab, opens collapsed groups, clears a hiding search, then expands and scrolls to the card. Links outside the world folder open normally.
 23. **Reload button** in the section header, to redraw the sidebar on demand.
 24. **Bookmarks.** Every expanded entry has a bookmark button on the left of its footer (opposite Edit); it turns the accent color when the entry is bookmarked. A Bookmarks button to the left of Reload in each section header swaps the list for a Bookmarks view, with bookmarked entries grouped by section (collapsible and drag-to-reorder). Clicking the button again returns to the last section. Bookmarks are kept in plugin data and follow renames.
+25. **Click-to-zoom photos.** When an entry with a photo is expanded (Characters, Locations, Employers and Bookmarks), hovering the photo shows a magnifier badge in its top-right corner, and clicking it opens the image full-screen. Scroll to zoom, drag to pan, and click or press Esc to close, with no need to open the note first.
 
 ### Branding
 
-25. **Rebranded as "Hatherton's World Builder"** with a new plugin ID (`world-builder-lh`), author, description and package name, and an orbit icon for the ribbon and sidebar instead of the globe. Credit to the original author, wesswart77, is kept.
+26. **Rebranded as "Hatherton's World Builder"** with a new plugin ID (`world-builder-lh`), author, description and package name, and an orbit icon for the ribbon and sidebar instead of the globe. Credit to the original author, wesswart77, is kept.

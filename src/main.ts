@@ -20,7 +20,7 @@ interface WorldBuilderSettings {
 	characterOrder: Record<string, string[]>;
 	/** Lower-cased employer names whose character sub-section is collapsed. */
 	collapsedEmployers: string[];
-	/** Employer type groups ("corporation", "government", "criminal", "" = unassigned) collapsed on the Employers tab. */
+	/** Employer type groups ("corporation", "government", "military", "criminal", "" = unassigned) collapsed on the Employers tab. */
 	collapsedEmployerTypes: string[];
 	/** Note paths of parent entries on hierarchical tabs (Locations) whose subtree is collapsed. */
 	collapsedParents: string[];
@@ -48,6 +48,7 @@ const DEFAULT_SETTINGS: WorldBuilderSettings = {
 const EMPLOYER_TYPES: { key: string; label: string }[] = [
 	{ key: "corporation", label: "Corporation" },
 	{ key: "government", label: "Government" },
+	{ key: "military", label: "Military" },
 	{ key: "criminal", label: "Criminal" },
 ];
 
@@ -93,6 +94,87 @@ function stripGraphics(markdown: string): string {
 		})
 		.replace(/!\[[^\]]*\]\((?:<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\)/g, "") // ![alt](path)
 		.replace(/<img\b[^>]*\/?>/gi, ""); // raw <img> tags
+}
+
+/**
+ * Full-screen image zoom (lightbox), opened by clicking the photo on an expanded card, so a
+ * picture can be viewed large straight from the sidebar without opening the note to edit it.
+ * The image opens fitted to the window. Scroll to zoom in/out around the cursor, drag to pan
+ * once zoomed. A plain click (no drag) or Escape closes it.
+ */
+function openImageZoom(src: string, alt: string) {
+	document.querySelector(".wb-zoom-overlay")?.remove();
+
+	const overlay = document.body.createDiv({ cls: "wb-zoom-overlay", attr: { role: "dialog", "aria-modal": "true", "aria-label": alt || "Image" } });
+	const img = overlay.createEl("img", { cls: "wb-zoom-img", attr: { src, alt, draggable: "false" } });
+
+	let scale = 1;
+	let x = 0;
+	let y = 0;
+	const apply = () => {
+		img.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+		overlay.toggleClass("is-zoomed", scale > 1);
+	};
+
+	const close = () => {
+		overlay.remove();
+		document.removeEventListener("keydown", onKey, true);
+	};
+	const onKey = (e: KeyboardEvent) => {
+		if (e.key === "Escape") {
+			e.preventDefault();
+			e.stopPropagation();
+			close();
+		}
+	};
+	document.addEventListener("keydown", onKey, true);
+
+	overlay.addEventListener("wheel", (e) => {
+		e.preventDefault();
+		const prev = scale;
+		scale = Math.min(10, Math.max(1, scale * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+		if (scale === 1) {
+			x = 0;
+			y = 0;
+		} else {
+			// Keep the point under the cursor fixed while zooming.
+			const cx = e.clientX - window.innerWidth / 2;
+			const cy = e.clientY - window.innerHeight / 2;
+			x = cx - ((cx - x) * scale) / prev;
+			y = cy - ((cy - y) * scale) / prev;
+		}
+		apply();
+	}, { passive: false });
+
+	// Drag to pan; a press that barely moves counts as a click and closes the zoom.
+	let dragStart: { mx: number; my: number; x: number; y: number } | null = null;
+	let moved = false;
+	overlay.addEventListener("pointerdown", (e) => {
+		if (e.button !== 0) return;
+		dragStart = { mx: e.clientX, my: e.clientY, x, y };
+		moved = false;
+		overlay.setPointerCapture(e.pointerId);
+	});
+	overlay.addEventListener("pointermove", (e) => {
+		if (!dragStart) return;
+		const dx = e.clientX - dragStart.mx;
+		const dy = e.clientY - dragStart.my;
+		if (!moved && Math.hypot(dx, dy) < 4) return;
+		moved = true;
+		if (scale > 1) {
+			overlay.addClass("is-panning");
+			x = dragStart.x + dx;
+			y = dragStart.y + dy;
+			apply();
+		}
+	});
+	overlay.addEventListener("pointerup", () => {
+		overlay.removeClass("is-panning");
+		const wasClick = dragStart && !moved;
+		dragStart = null;
+		if (wasClick) close();
+	});
+	img.onerror = close;
 }
 
 async function ensureFolder(app: App, path: string) {
@@ -707,7 +789,7 @@ class WorldBuilderView extends ItemView {
 			thumbs?: boolean;
 			reload?: boolean;
 			employerGroups?: boolean;
-			/** Employers: group entries under collapsible Corporation / Government / Criminal headers by their `type` property. */
+			/** Employers: group entries under collapsible Corporation / Government / Military / Criminal headers by their `type` property. */
 			typeGroups?: boolean;
 			stackBadge?: boolean;
 			/** Clicking a card expands an in-sidebar, text-only preview instead of opening the note. */
@@ -914,7 +996,7 @@ class WorldBuilderView extends ItemView {
 	}
 
 	/**
-	 * Employers: one collapsible sub-section per `type` property (Corporation, Government, then Criminal),
+	 * Employers: one collapsible sub-section per `type` property (Corporation, Government, Military, then Criminal),
 	 * with employers that have no recognised type in an "Unassigned" section last. Headers use the
 	 * same chevron as the Characters employer groups, without a logo. Each section is its own
 	 * drag-to-reorder list; its order is merged back into the tab's single saved order.
@@ -1126,7 +1208,23 @@ class WorldBuilderView extends ItemView {
 			const src = this.findFirstImageSrc(content, file);
 			if (src) {
 				const img = thumb.createEl("img", { attr: { src, alt: "", draggable: "false" } });
-				img.onerror = () => img.remove();
+				thumb.addClass("wb-thumb-has-img");
+				// Magnifier badge in the top-right corner; CSS only reveals it (on hover) while the
+				// card is expanded, which is also the only time a click on the photo zooms it.
+				const zoomBadge = thumb.createSpan({ cls: "wb-thumb-zoom", attr: { "aria-hidden": "true" } });
+				setIcon(zoomBadge, "zoom-in");
+				img.onerror = () => {
+					img.remove();
+					zoomBadge.remove();
+					thumb.removeClass("wb-thumb-has-img");
+				};
+				thumb.addEventListener("click", (e) => {
+					// Collapsed: let the click fall through to the card so it expands as usual.
+					if (!card.classList.contains("wb-card-expanded") || !thumb.contains(img)) return;
+					e.preventDefault();
+					e.stopPropagation();
+					openImageZoom(src, title);
+				});
 			}
 			body = row.createDiv("wb-card-body");
 		}
