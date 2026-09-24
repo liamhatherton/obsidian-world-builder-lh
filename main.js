@@ -26,8 +26,8 @@ var import_obsidian = require("obsidian");
 var DEFAULT_SETTINGS = {
   worldFolder: "World",
   characterOrder: {},
-  collapsedEmployers: [],
-  collapsedEmployerTypes: [],
+  collapsedGroups: [],
+  collapsedGroupTypes: [],
   collapsedParents: [],
   collapsedSubsidiaries: [],
   sectionOrder: {},
@@ -35,7 +35,7 @@ var DEFAULT_SETTINGS = {
   collapsedBookmarkGroups: [],
   inlineEditor: "live"
 };
-var EMPLOYER_TYPES = [
+var GROUP_TYPES = [
   { key: "corporation", label: "Corporation" },
   { key: "government", label: "Government" },
   { key: "military", label: "Military" },
@@ -183,18 +183,18 @@ function documentSearchText(content, fm) {
   return [...values, body].join(" ");
 }
 var hasValue = (v) => v !== void 0 && v !== null && !(typeof v === "string" && v.trim() === "");
-var SECTION_TABS = ["characters", "locations", "employers", "lore", "timeline"];
+var SECTION_TABS = ["characters", "locations", "groups", "lore", "timeline"];
 var SECTION_LABELS = {
   characters: "Characters",
   locations: "Locations",
-  employers: "Employers",
+  groups: "Groups",
   lore: "Lore",
   timeline: "Timeline"
 };
 var SEARCH_HINTS = {
-  characters: { noun: "characters", tip: "Matches name, employer, ship and home" },
+  characters: { noun: "characters", tip: "Matches name, group, ship and home" },
   locations: { noun: "locations", tip: "Matches the name and the text of the note" },
-  employers: { noun: "employers", tip: "Matches the name and the text of the note" },
+  groups: { noun: "groups", tip: "Matches the name and the text of the note" },
   lore: { noun: "lore", tip: "Matches the title and the text of the note" },
   timeline: { noun: "timeline", tip: "Matches the title and the text of the note" },
   bookmarks: { noun: "bookmarks", tip: "Matches each bookmark the same way its own tab does" }
@@ -262,7 +262,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     super(leaf);
     this.activeTab = "characters";
     /** What is typed in the search bar for each tab; kept here so it survives a redraw (Reload, new note, ...). */
-    this.searchQueries = { characters: "", locations: "", employers: "", lore: "", timeline: "", bookmarks: "" };
+    this.searchQueries = { characters: "", locations: "", groups: "", lore: "", timeline: "", bookmarks: "" };
     /** The section tab to return to when the Bookmarks button is clicked again while viewing bookmarks. */
     this.lastSectionTab = "characters";
     /** How each section draws its cards, captured in renderSection() so the Bookmarks view can draw them the same way. */
@@ -367,7 +367,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     const tabs = [
       { id: "characters", label: "Characters" },
       { id: "locations", label: "Locations" },
-      { id: "employers", label: "Employers" },
+      { id: "groups", label: "Groups" },
       { id: "lore", label: "Lore" },
       { id: "timeline", label: "Timeline" }
     ];
@@ -466,19 +466,19 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         var _a2, _b2;
         return {
           title: (_a2 = fm.name) != null ? _a2 : "Unnamed",
-          // Two lines: age/home, then employer/ship (a line with no values is dropped).
+          // Two lines: age/home, then group/ship (a line with no values is dropped).
           meta: [
             labeledLine([["Age", fm.age], ["Home", fm.home]]),
-            labeledLine([["Employer", fm.employer], ["Ship", fm.ship]])
+            labeledLine([["Group", fm.group], ["Ship", fm.ship]])
           ].filter(Boolean).join("\n"),
           badge: (_b2 = fm.role) != null ? _b2 : "",
           // `pov` is set by hand in the note's properties (not in the New Character modal).
           extraBadges: hasValue(fm.pov) ? [{ text: "POV", cls: "wb-badge-pov" }] : [],
           // What the search bar matches against.
-          search: [fm.name, fm.employer, fm.ship, fm.home].filter(Boolean).join(" ")
+          search: [fm.name, fm.group, fm.ship, fm.home].filter(Boolean).join(" ")
         };
       },
-      { thumbs: true, employerGroups: true, stackBadge: true, expandable: true }
+      { thumbs: true, groupGroups: true, stackBadge: true, expandable: true }
     );
     await this.renderSection(
       "locations",
@@ -513,11 +513,11 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       }
     );
     await this.renderSection(
-      "employers",
-      contents.employers,
-      `${folder}/Employers`,
-      "Employers",
-      () => new EmployerModal(this.app, this.plugin, () => this.render()).open(),
+      "groups",
+      contents.groups,
+      `${folder}/Groups`,
+      "Groups",
+      () => new GroupModal(this.app, this.plugin, () => this.render()).open(),
       (fm) => {
         var _a2, _b2, _c2;
         return {
@@ -591,10 +591,10 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     this.updateBookmarkHeaderButtons();
   }
   /**
-   * Hides the cards on one tab that don't match its search text (and, on Characters, any employer
+   * Hides the cards on one tab that don't match its search text (and, on Characters, any group
    * section left empty). Every word typed must appear in the card's searchable text, in any order,
    * ignoring case and accents. Works on the existing cards, so nothing is re-read or re-rendered.
-   * Characters are matched on name, employer, ship and home; other tabs on the name and the note's text.
+   * Characters are matched on name, group, ship and home; other tabs on the name and the note's text.
    */
   applySearch(tab) {
     var _a;
@@ -769,7 +769,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       this.createNoResultsLine(container, label);
       return;
     }
-    if (!opts.employerGroups) {
+    if (!opts.groupGroups) {
       const list = container.createDiv("wb-list");
       const ordered = this.orderEntries(entries, (_d = this.plugin.settings.sectionOrder[tab]) != null ? _d : []);
       for (const entry of ordered) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
@@ -782,26 +782,26 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     }
     const groups = /* @__PURE__ */ new Map();
     for (const entry of entries) {
-      const employer = ((_e = entry.fm.employer) != null ? _e : "").trim();
-      const key = employer.toLowerCase();
-      let group = groups.get(key);
-      if (!group) {
-        group = { label: employer || "No Employer", items: [] };
-        groups.set(key, group);
+      const group = ((_e = entry.fm.group) != null ? _e : "").trim();
+      const key = group.toLowerCase();
+      let bucket = groups.get(key);
+      if (!bucket) {
+        bucket = { label: group || "No Group", items: [] };
+        groups.set(key, bucket);
       }
-      group.items.push(entry);
+      bucket.items.push(entry);
     }
-    const employerLogos = /* @__PURE__ */ new Map();
-    const employerFolder = `${this.plugin.settings.worldFolder}/Employers/`;
+    const groupLogos = /* @__PURE__ */ new Map();
+    const groupFolder = `${this.plugin.settings.worldFolder}/Groups/`;
     for (const file of this.app.vault.getMarkdownFiles()) {
-      if (!file.path.startsWith(employerFolder)) continue;
+      if (!file.path.startsWith(groupFolder)) continue;
       const content = await this.app.vault.cachedRead(file);
       const src = this.findFirstImageSrc(content, file);
       if (!src) continue;
       const names = [(_f = readFrontmatter(content).name) != null ? _f : "", file.basename];
       for (const n of names) {
         const k = parseRefName(n).toLowerCase();
-        if (k && !employerLogos.has(k)) employerLogos.set(k, src);
+        if (k && !groupLogos.has(k)) groupLogos.set(k, src);
       }
     }
     const orderedGroups = [...groups.entries()].sort(
@@ -812,7 +812,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       header.setAttribute("role", "button");
       header.setAttribute("tabindex", "0");
       (0, import_obsidian.setIcon)(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
-      const logoSrc = key ? employerLogos.get(parseRefName(key).toLowerCase()) : void 0;
+      const logoSrc = key ? groupLogos.get(parseRefName(key).toLowerCase()) : void 0;
       if (logoSrc) {
         const logo = header.createEl("img", {
           cls: "wb-group-logo",
@@ -827,17 +827,17 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         list.classList.toggle("is-collapsed", collapsed);
         header.setAttribute("aria-expanded", String(!collapsed));
       };
-      applyCollapsed(this.plugin.settings.collapsedEmployers.includes(key));
+      applyCollapsed(this.plugin.settings.collapsedGroups.includes(key));
       this.groupCollapsers.set(header, () => {
         const settings = this.plugin.settings;
-        if (!settings.collapsedEmployers.includes(key)) settings.collapsedEmployers = [...settings.collapsedEmployers, key];
+        if (!settings.collapsedGroups.includes(key)) settings.collapsedGroups = [...settings.collapsedGroups, key];
         applyCollapsed(true);
       });
       const toggleCollapsed = async () => {
         if (normalizeForSearch(this.searchQueries[tab]).trim()) return;
         const settings = this.plugin.settings;
-        const collapse = !settings.collapsedEmployers.includes(key);
-        settings.collapsedEmployers = collapse ? [...settings.collapsedEmployers, key] : settings.collapsedEmployers.filter((k) => k !== key);
+        const collapse = !settings.collapsedGroups.includes(key);
+        settings.collapsedGroups = collapse ? [...settings.collapsedGroups, key] : settings.collapsedGroups.filter((k) => k !== key);
         applyCollapsed(collapse);
         await this.plugin.saveSettings();
       };
@@ -895,20 +895,20 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     }
   }
   /**
-   * Employers: one collapsible sub-section per `type` property (Corporation, Government, Military, then Criminal),
-   * with employers that have no recognised type in an "Unassigned" section last. Headers use the
-   * same chevron as the Characters employer groups, without a logo. Each section is its own
+   * Groups: one collapsible sub-section per `type` property (Corporation, Government, Military, then Criminal),
+   * with groups that have no recognised type in an "Unassigned" section last. Headers use the
+   * same chevron as the Characters group groups, without a logo. Each section is its own
    * drag-to-reorder list; its order is merged back into the tab's single saved order.
    *
-   * An employer whose `subsidiary-of` property names another employer on this tab (matched on
-   * that employer's `name`, tolerant of "[[Name]]" syntax, case and accents) is not listed in its
+   * An group whose `subsidiary-of` property names another group on this tab (matched on
+   * that group's `name`, tolerant of "[[Name]]" syntax, case and accents) is not listed in its
    * own type section: it is drawn under its parent's card, inside a collapsible "Subsidiaries"
    * label, whatever its own `type` says. If the parent can't be found (unset, misspelled, not an
-   * employer, or part of a loop), the entry falls back to its `type` section as usual.
+   * group, or part of a loop), the entry falls back to its `type` section as usual.
    */
   renderTypeGroups(tab, container, entries, getCard, opts) {
     var _a;
-    const known = new Set(EMPLOYER_TYPES.map((t) => t.key));
+    const known = new Set(GROUP_TYPES.map((t) => t.key));
     const { roots, childrenOf } = buildParentTree(
       entries,
       (fm) => {
@@ -927,7 +927,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(entry);
     }
-    const sections = [...EMPLOYER_TYPES, { key: "", label: "Unassigned" }].filter((t) => groups.has(t.key));
+    const sections = [...GROUP_TYPES, { key: "", label: "Unassigned" }].filter((t) => groups.has(t.key));
     for (const { key, label } of sections) {
       const header = container.createDiv("wb-group-header");
       header.setAttribute("role", "button");
@@ -940,17 +940,17 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         list.classList.toggle("is-collapsed", collapsed);
         header.setAttribute("aria-expanded", String(!collapsed));
       };
-      applyCollapsed(this.plugin.settings.collapsedEmployerTypes.includes(key));
+      applyCollapsed(this.plugin.settings.collapsedGroupTypes.includes(key));
       this.groupCollapsers.set(header, () => {
         const settings = this.plugin.settings;
-        if (!settings.collapsedEmployerTypes.includes(key)) settings.collapsedEmployerTypes = [...settings.collapsedEmployerTypes, key];
+        if (!settings.collapsedGroupTypes.includes(key)) settings.collapsedGroupTypes = [...settings.collapsedGroupTypes, key];
         applyCollapsed(true);
       });
       const toggleCollapsed = async () => {
         if (normalizeForSearch(this.searchQueries[tab]).trim()) return;
         const settings = this.plugin.settings;
-        const collapse = !settings.collapsedEmployerTypes.includes(key);
-        settings.collapsedEmployerTypes = collapse ? [...settings.collapsedEmployerTypes, key] : settings.collapsedEmployerTypes.filter((k) => k !== key);
+        const collapse = !settings.collapsedGroupTypes.includes(key);
+        settings.collapsedGroupTypes = collapse ? [...settings.collapsedGroupTypes, key] : settings.collapsedGroupTypes.filter((k) => k !== key);
         applyCollapsed(collapse);
         await this.plugin.saveSettings();
       };
@@ -961,17 +961,17 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
           toggleCollapsed();
         }
       };
-      this.renderEmployerList(tab, list, groups.get(key), entries, childrenOf, getCard, opts);
+      this.renderGroupList(tab, list, groups.get(key), entries, childrenOf, getCard, opts);
     }
   }
   /**
-   * Draws one drag-to-reorder list of employer cards (a type section, or one parent's
+   * Draws one drag-to-reorder list of group cards (a type section, or one parent's
    * subsidiaries). Any card with subsidiaries gets a `.wb-child-group` right after it holding a
    * collapsible "Subsidiaries" label and their own nested list, drawn the same way (so a
    * subsidiary's own subsidiaries nest one level further in). The child group follows its card
    * when it is dragged, and subsidiaries can only be reordered among themselves.
    */
-  renderEmployerList(tab, list, groupEntries, allEntries, childrenOf, getCard, opts) {
+  renderGroupList(tab, list, groupEntries, allEntries, childrenOf, getCard, opts) {
     var _a;
     const items = this.orderEntries(groupEntries, (_a = this.plugin.settings.sectionOrder[tab]) != null ? _a : []);
     for (const entry of items) {
@@ -987,7 +987,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       await this.plugin.saveSettings();
     });
   }
-  /** The collapsible "Subsidiaries" label (and its nested list) drawn right under a parent employer's card. */
+  /** The collapsible "Subsidiaries" label (and its nested list) drawn right under a parent group's card. */
   renderSubsidiaries(tab, list, parent, kids, allEntries, childrenOf, getCard, opts) {
     const path = parent.file.path;
     const group = list.createDiv("wb-child-group wb-subsidiary-group");
@@ -1024,7 +1024,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         toggleCollapsed();
       }
     };
-    this.renderEmployerList(tab, subList, kids, allEntries, childrenOf, getCard, opts);
+    this.renderGroupList(tab, subList, kids, allEntries, childrenOf, getCard, opts);
   }
   /**
    * Applies a saved manual order (a list of note paths, earliest first) to a set of entries.
@@ -1374,7 +1374,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
   /**
    * "Collapse all" for one section, triggered by double-clicking its (already active) tab button:
    * closes every expanded card preview and folds every collapsible group label in the section
-   * (employer groups on Characters, type groups and Subsidiaries on Employers, every tree label
+   * (group groups on Characters, type groups and Subsidiaries on Groups, every tree label
    * and the Ships section on Locations). The folded state is saved like a manual fold. While a
    * search is active the matching entries still show (as with a manual fold); the saved state
    * takes over once the search is cleared.
@@ -1638,7 +1638,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     this.revealCard(tab, dest.path);
   }
   /**
-   * Brings one tab's card into view: un-collapses its employer group if needed, clears an active
+   * Brings one tab's card into view: un-collapses its group group if needed, clears an active
    * search filter that would otherwise hide it, expands it (recording that as a nav entry, same as
    * a direct click would), and scrolls it into view.
    */
@@ -1674,9 +1674,9 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     card.scrollIntoView({ block: "center", behavior: "smooth" });
   }
   /**
-   * Makes the cards in one list drag-sortable (an employer's character group, a hierarchical
+   * Makes the cards in one list drag-sortable (an group's character group, a hierarchical
    * tab's parent or child group, or a whole flat tab like Lore). Each list only accepts cards
-   * that were picked up from that same list, so entries can't be dragged between employers,
+   * that were picked up from that same list, so entries can't be dragged between groups,
    * between a parent's children and its siblings, or between tabs. Every DOM query here is
    * scoped to this list's own direct children (`:scope > .wb-card`) so a hierarchical tab's
    * nested child-group lists - which live inside this list's DOM subtree - are never touched by
@@ -1998,7 +1998,7 @@ var CharacterModal = class extends import_obsidian.Modal {
       name: "",
       role: "protagonist",
       age: "",
-      employer: "",
+      group: "",
       ship: "",
       home: "",
       physicalDesc: "",
@@ -2025,8 +2025,8 @@ var CharacterModal = class extends import_obsidian.Modal {
     new import_obsidian.Setting(contentEl).setName("Age").addText((t) => {
       t.setPlaceholder("e.g. 34").onChange((v) => this.data.age = v);
     });
-    new import_obsidian.Setting(contentEl).setName("Employer").addText((t) => {
-      t.setPlaceholder("Employer name").onChange((v) => this.data.employer = v);
+    new import_obsidian.Setting(contentEl).setName("Group").addText((t) => {
+      t.setPlaceholder("Group name").onChange((v) => this.data.group = v);
     });
     new import_obsidian.Setting(contentEl).setName("Ship").addText((t) => {
       t.setPlaceholder("Ship name").onChange((v) => this.data.ship = v);
@@ -2081,7 +2081,7 @@ var CharacterModal = class extends import_obsidian.Modal {
       `name: "${this.data.name}"`,
       `role: ${this.data.role}`,
       `age: "${this.data.age}"`,
-      `employer: "${this.data.employer}"`,
+      `group: "${this.data.group}"`,
       `ship: "${this.data.ship}"`,
       `home: "${this.data.home}"`,
       `type: character`,
@@ -2185,7 +2185,7 @@ var LocationModal = class extends import_obsidian.Modal {
     this.contentEl.empty();
   }
 };
-var EmployerModal = class extends import_obsidian.Modal {
+var GroupModal = class extends import_obsidian.Modal {
   constructor(app, plugin, onDone) {
     super(app);
     this.data = {
@@ -2204,16 +2204,16 @@ var EmployerModal = class extends import_obsidian.Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.addClass("wb-modal");
-    contentEl.createEl("h2", { text: "New Employer" });
+    contentEl.createEl("h2", { text: "New Group" });
     new import_obsidian.Setting(contentEl).setName("Name").addText((t) => {
-      t.setPlaceholder("Employer name").onChange((v) => this.data.name = v);
+      t.setPlaceholder("Group name").onChange((v) => this.data.name = v);
     });
     new import_obsidian.Setting(contentEl).setName("Type").addDropdown((d) => {
-      EMPLOYER_TYPES.forEach(({ key, label }) => d.addOption(key, label));
+      GROUP_TYPES.forEach(({ key, label }) => d.addOption(key, label));
       d.setValue(this.data.type);
       d.onChange((v) => this.data.type = v);
     });
-    const folder = `${this.plugin.settings.worldFolder}/Employers/`;
+    const folder = `${this.plugin.settings.worldFolder}/Groups/`;
     const existing = Array.from(new Set(
       this.app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(folder)).map((f) => {
         var _a, _b;
@@ -2221,7 +2221,7 @@ var EmployerModal = class extends import_obsidian.Modal {
         return typeof name === "string" && name.trim() ? name.trim() : f.basename;
       })
     )).sort((a, b) => a.localeCompare(b));
-    new import_obsidian.Setting(contentEl).setName("Subsidiary of").setDesc("Nests this employer under its parent's Subsidiaries label instead of its Type section.").addDropdown((d) => {
+    new import_obsidian.Setting(contentEl).setName("Subsidiary of").setDesc("Nests this group under its parent's Subsidiaries label instead of its Type section.").addDropdown((d) => {
       d.addOption("", "None");
       existing.forEach((n) => d.addOption(n, n));
       d.setValue(this.data.subsidiaryOf);
@@ -2258,7 +2258,7 @@ var EmployerModal = class extends import_obsidian.Modal {
       new import_obsidian.Notice("Name is required.");
       return;
     }
-    const folder = `${this.plugin.settings.worldFolder}/Employers`;
+    const folder = `${this.plugin.settings.worldFolder}/Groups`;
     const enemyLinks = this.data.enemies.split(",").filter(Boolean).map((e) => `[[${e.trim()}]]`).join(", ");
     const allyLinks = this.data.allies.split(",").filter(Boolean).map((a) => `[[${a.trim()}]]`).join(", ");
     const lines = [
@@ -2268,12 +2268,12 @@ var EmployerModal = class extends import_obsidian.Modal {
       `${SUBSIDIARY_OF}: "${this.data.subsidiaryOf.replace(/"/g, "'")}"`,
       `alignment: ${this.data.alignment}`,
       `goals: "${this.data.goals.replace(/"/g, "'")}"`,
-      `entry_type: employer`,
+      `entry_type: group`,
       "---",
       "",
       `# ${this.data.name}`,
       "",
-      `**Type:** ${(_b = (_a = EMPLOYER_TYPES.find((t) => t.key === this.data.type)) == null ? void 0 : _a.label) != null ? _b : this.data.type}`,
+      `**Type:** ${(_b = (_a = GROUP_TYPES.find((t) => t.key === this.data.type)) == null ? void 0 : _a.label) != null ? _b : this.data.type}`,
       ...this.data.subsidiaryOf ? [`**Subsidiary of:** [[${this.data.subsidiaryOf}]]`] : [],
       `**Alignment:** ${this.data.alignment}`
     ];
@@ -2281,7 +2281,7 @@ var EmployerModal = class extends import_obsidian.Modal {
     if (allyLinks) lines.push(`**Allies:** ${allyLinks}`);
     lines.push("", "## Goals", this.data.goals || "_None provided._", "", "## Description", this.data.description || "_None provided._");
     const file = await createNote(this.app, folder, this.data.name, lines.join("\n"));
-    new import_obsidian.Notice(`Employer "${this.data.name}" created.`);
+    new import_obsidian.Notice(`Group "${this.data.name}" created.`);
     this.close();
     this.onDone();
     await this.app.workspace.getLeaf().openFile(file);
@@ -2459,9 +2459,9 @@ var WorldBuilderPlugin = class extends import_obsidian.Plugin {
       callback: () => new LocationModal(this.app, this, () => this.refreshSidebar()).open()
     });
     this.addCommand({
-      id: "new-employer",
-      name: "New Employer",
-      callback: () => new EmployerModal(this.app, this, () => this.refreshSidebar()).open()
+      id: "new-group",
+      name: "New Group",
+      callback: () => new GroupModal(this.app, this, () => this.refreshSidebar()).open()
     });
     this.addCommand({
       id: "new-lore",
@@ -2534,14 +2534,32 @@ var WorldBuilderPlugin = class extends import_obsidian.Plugin {
     const data = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
     this.settings.characterOrder = (_a = data == null ? void 0 : data.characterOrder) != null ? _a : {};
-    this.settings.collapsedEmployers = (_b = data == null ? void 0 : data.collapsedEmployers) != null ? _b : [];
-    this.settings.collapsedEmployerTypes = (_c = data == null ? void 0 : data.collapsedEmployerTypes) != null ? _c : [];
+    this.settings.collapsedGroups = (_b = data == null ? void 0 : data.collapsedGroups) != null ? _b : [];
+    this.settings.collapsedGroupTypes = (_c = data == null ? void 0 : data.collapsedGroupTypes) != null ? _c : [];
     this.settings.collapsedParents = (_d = data == null ? void 0 : data.collapsedParents) != null ? _d : [];
     this.settings.collapsedSubsidiaries = (_e = data == null ? void 0 : data.collapsedSubsidiaries) != null ? _e : [];
     this.settings.sectionOrder = (_f = data == null ? void 0 : data.sectionOrder) != null ? _f : {};
     this.settings.bookmarks = (_g = data == null ? void 0 : data.bookmarks) != null ? _g : [];
     this.settings.collapsedBookmarkGroups = (_h = data == null ? void 0 : data.collapsedBookmarkGroups) != null ? _h : [];
+    this.migrateLegacySettings(data);
     this.settings.inlineEditor = (data == null ? void 0 : data.inlineEditor) === "raw" ? "raw" : "live";
+  }
+  /**
+   * Carries over plugin data saved before the "Employers" tab was renamed to "Groups", so
+   * collapsed sections and custom ordering survive the rename. The old keys are dropped on the
+   * next save.
+   */
+  migrateLegacySettings(data) {
+    if (!data) return;
+    const legacy = this.settings;
+    if (!data.collapsedGroups && data.collapsedEmployers) this.settings.collapsedGroups = data.collapsedEmployers;
+    if (!data.collapsedGroupTypes && data.collapsedEmployerTypes) this.settings.collapsedGroupTypes = data.collapsedEmployerTypes;
+    delete legacy.collapsedEmployers;
+    delete legacy.collapsedEmployerTypes;
+    const order = this.settings.sectionOrder;
+    if (order.employers && !order.groups) order.groups = order.employers;
+    delete order.employers;
+    this.settings.collapsedBookmarkGroups = this.settings.collapsedBookmarkGroups.map((k) => k === "employers" ? "groups" : k);
   }
   async saveSettings() {
     await this.saveData(this.settings);

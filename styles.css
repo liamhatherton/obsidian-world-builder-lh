@@ -242,7 +242,7 @@
 }
 /* The first thing in the scrolling region sits a little below the fixed header. */
 .wb-scroll .wb-tab-body > :first-child { margin-top: 10px; }
-/* Every visible employer header after the first one gets extra space above it (search can hide any of them). */
+/* Every visible group header after the first one gets extra space above it (search can hide any of them). */
 .wb-group-header:not(.wb-filtered-out) ~ .wb-group-header:not(.wb-filtered-out) { margin-top: 16px; }
 .wb-group-header:hover .wb-group-title { color: var(--text-accent); }
 .wb-group-chevron {
@@ -295,7 +295,7 @@
 .wb-list > .wb-drop-after { box-shadow: 0 3px 0 0 var(--interactive-accent); }
 
 /*
- * Hierarchical tabs (Locations): every parent gets a collapsible label (same look as the Employers
+ * Hierarchical tabs (Locations): every parent gets a collapsible label (same look as the Groups
  * headers) right above its card. Collapsing it hides that card and its whole .wb-child-group
  * subtree. The label sits inside the flex list, so the list's gap spaces it from its card.
  */
@@ -384,7 +384,7 @@
 	cursor: default;
 }
 .wb-card-expand-body {
-	/* Matches .wb-card-meta (the Employer / Ship line already shown on the card). */
+	/* Matches .wb-card-meta (the Group / Ship line already shown on the card). */
 	font-size: 0.8em;
 	color: var(--text-normal);
 	cursor: text;
@@ -646,7 +646,7 @@
 }
 
 /*
- * Employers: a parent employer's subsidiaries sit in an indented .wb-child-group right under its
+ * Groups: a parent group's subsidiaries sit in an indented .wb-child-group right under its
  * card, headed by a collapsible "Subsidiaries" label (same chevron look as the type headers).
  */
 .wb-subsidiary-group > .wb-group-header.wb-subsidiary-header { margin: 2px 0 6px; }
