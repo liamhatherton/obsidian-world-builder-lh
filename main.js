@@ -277,6 +277,14 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     this.hierarchicalTabs = /* @__PURE__ */ new Set(["locations"]);
     /** Un-collapses one hierarchical parent's subtree, keyed by the parent's note path (used by revealCard). */
     this.treeExpanders = /* @__PURE__ */ new Map();
+    /**
+     * Every collapsible group label drawn in the sidebar, mapped to a function that folds it and
+     * records that in settings (without saving). Used by collapseAllInTab(); weak so old DOM from a
+     * previous render() is simply dropped.
+     */
+    this.groupCollapsers = /* @__PURE__ */ new WeakMap();
+    /** Whether the click that started the current (possible) double-click landed on the tab that was already active. */
+    this.tabClickWasOnActive = false;
     // Rebuilt on every render(); let switchTab() and the nav buttons operate without closures.
     this.tabBarEl = null;
     this.tabContents = {};
@@ -346,10 +354,15 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       const btn = tabBar.createEl("button", { text: label, cls: "wb-tab" });
       btn.setAttribute("data-tab", id);
       if (id === this.activeTab) btn.addClass("active");
-      btn.onclick = () => {
+      btn.onclick = (e) => {
+        if (e.detail <= 1) this.tabClickWasOnActive = id === this.activeTab;
         if (id === this.activeTab) return;
         this.switchTab(id);
         this.recordNav(id, null);
+      };
+      btn.ondblclick = () => {
+        if (!this.tabClickWasOnActive || id !== this.activeTab) return;
+        void this.collapseAllInTab(id);
       };
       const pane = {
         head: fixed.createDiv("wb-tab-content wb-tab-head"),
@@ -779,6 +792,11 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         header.setAttribute("aria-expanded", String(!collapsed));
       };
       applyCollapsed(this.plugin.settings.collapsedEmployers.includes(key));
+      this.groupCollapsers.set(header, () => {
+        const settings = this.plugin.settings;
+        if (!settings.collapsedEmployers.includes(key)) settings.collapsedEmployers = [...settings.collapsedEmployers, key];
+        applyCollapsed(true);
+      });
       const toggleCollapsed = async () => {
         if (normalizeForSearch(this.searchQueries[tab]).trim()) return;
         const settings = this.plugin.settings;
@@ -887,6 +905,11 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         header.setAttribute("aria-expanded", String(!collapsed));
       };
       applyCollapsed(this.plugin.settings.collapsedEmployerTypes.includes(key));
+      this.groupCollapsers.set(header, () => {
+        const settings = this.plugin.settings;
+        if (!settings.collapsedEmployerTypes.includes(key)) settings.collapsedEmployerTypes = [...settings.collapsedEmployerTypes, key];
+        applyCollapsed(true);
+      });
       const toggleCollapsed = async () => {
         if (normalizeForSearch(this.searchQueries[tab]).trim()) return;
         const settings = this.plugin.settings;
@@ -945,6 +968,11 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       header.setAttribute("aria-expanded", String(!collapsed));
     };
     applyCollapsed(this.plugin.settings.collapsedSubsidiaries.includes(path));
+    this.groupCollapsers.set(header, () => {
+      const settings = this.plugin.settings;
+      if (!settings.collapsedSubsidiaries.includes(path)) settings.collapsedSubsidiaries = [...settings.collapsedSubsidiaries, path];
+      applyCollapsed(true);
+    });
     const toggleCollapsed = async () => {
       if (normalizeForSearch(this.searchQueries[tab]).trim()) return;
       const settings = this.plugin.settings;
@@ -1037,6 +1065,11 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       await this.plugin.saveSettings();
     };
     this.treeExpanders.set(path, () => setCollapsed(false));
+    this.groupCollapsers.set(header, () => {
+      const settings = this.plugin.settings;
+      if (!settings.collapsedParents.includes(path)) settings.collapsedParents = [...settings.collapsedParents, path];
+      apply(true);
+    });
     const toggle = () => {
       if (normalizeForSearch(this.searchQueries[tab]).trim()) return;
       setCollapsed(!header.classList.contains("is-collapsed"));
@@ -1167,6 +1200,38 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     editBtn.createEl("span", { text: "Edit" });
     editBtn.onclick = () => this.app.workspace.getLeaf().openFile(entry.file);
     this.recordNav(tab, entry.file.path);
+  }
+  /**
+   * "Collapse all" for one section, triggered by double-clicking its (already active) tab button:
+   * closes every expanded card preview and folds every collapsible group label in the section
+   * (employer groups on Characters, type groups and Subsidiaries on Employers, every tree label
+   * and the Ships section on Locations). The folded state is saved like a manual fold. While a
+   * search is active the matching entries still show (as with a manual fold); the saved state
+   * takes over once the search is cleared.
+   */
+  async collapseAllInTab(tab) {
+    var _a;
+    const pane = this.tabContents[tab];
+    if (!pane) return;
+    let closedCard = false;
+    pane.body.querySelectorAll(".wb-card.wb-card-expanded").forEach((card) => {
+      var _a2;
+      (_a2 = card.querySelector(":scope > .wb-card-expand")) == null ? void 0 : _a2.remove();
+      card.removeClass("wb-card-expanded");
+      card.setAttribute("aria-expanded", "false");
+      closedCard = true;
+    });
+    if (closedCard) this.recordNav(tab, null);
+    let folded = false;
+    pane.body.querySelectorAll(".wb-group-header").forEach((header) => {
+      const collapse = this.groupCollapsers.get(header);
+      if (!collapse) return;
+      collapse();
+      folded = true;
+    });
+    this.refreshCurrentCardHighlight();
+    (_a = this.updateShadowFn) == null ? void 0 : _a.call(this);
+    if (folded) await this.plugin.saveSettings();
   }
   /** The section folder a tab's notes live in, e.g. "World/Characters". */
   tabFolder(tab) {

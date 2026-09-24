@@ -59,7 +59,8 @@ Everything below was added or changed in this fork (by liamhatherton), compiled 
 23. **Reload button** in the section header, to redraw the sidebar on demand.
 24. **Bookmarks.** Every expanded entry has a bookmark button on the left of its footer (opposite Edit); it turns the accent color when the entry is bookmarked. A Bookmarks button to the left of Reload in each section header swaps the list for a Bookmarks view, with bookmarked entries grouped by section (collapsible and drag-to-reorder). Clicking the button again returns to the last section. Bookmarks are kept in plugin data and follow renames.
 25. **Click-to-zoom photos.** When an entry with a photo is expanded (Characters, Locations, Employers and Bookmarks), hovering the photo shows a magnifier badge in its top-right corner, and clicking it opens the image full-screen. Scroll to zoom, drag to pan, and click or press Esc to close, with no need to open the note first.
+26. **Double-click to collapse a section.** Double-clicking the tab you're already on (Characters, Locations, Employers, Lore or Timeline) closes every expanded card and folds every collapsible group in that section. The folded state is saved like a manual fold.
 
 ### Branding
 
-26. **Rebranded as "Hatherton's World Builder"** with a new plugin ID (`world-builder-lh`), author, description and package name, and an orbit icon for the ribbon and sidebar instead of the globe. Credit to the original author, wesswart77, is kept.
+27. **Rebranded as "Hatherton's World Builder"** with a new plugin ID (`world-builder-lh`), author, description and package name, and an orbit icon for the ribbon and sidebar instead of the globe. Credit to the original author, wesswart77, is kept.

@@ -406,6 +406,14 @@ class WorldBuilderView extends ItemView {
 	private readonly hierarchicalTabs = new Set<WBTab>(["locations"]);
 	/** Un-collapses one hierarchical parent's subtree, keyed by the parent's note path (used by revealCard). */
 	private treeExpanders = new Map<string, () => Promise<void>>();
+	/**
+	 * Every collapsible group label drawn in the sidebar, mapped to a function that folds it and
+	 * records that in settings (without saving). Used by collapseAllInTab(); weak so old DOM from a
+	 * previous render() is simply dropped.
+	 */
+	private groupCollapsers = new WeakMap<HTMLElement, () => void>();
+	/** Whether the click that started the current (possible) double-click landed on the tab that was already active. */
+	private tabClickWasOnActive = false;
 
 	// Rebuilt on every render(); let switchTab() and the nav buttons operate without closures.
 	private tabBarEl: HTMLElement | null = null;
@@ -482,10 +490,18 @@ class WorldBuilderView extends ItemView {
 			const btn = tabBar.createEl("button", { text: label, cls: "wb-tab" });
 			btn.setAttribute("data-tab", id);
 			if (id === this.activeTab) btn.addClass("active");
-			btn.onclick = () => {
+			btn.onclick = (e) => {
+				// Remember, on the first click of a (possible) double-click, whether this tab was already open,
+				// so a double-click that *switches* to a tab doesn't also collapse it.
+				if (e.detail <= 1) this.tabClickWasOnActive = id === this.activeTab;
 				if (id === this.activeTab) return;
 				this.switchTab(id);
 				this.recordNav(id, null);
+			};
+			// Double-clicking the tab you're already on collapses everything in it.
+			btn.ondblclick = () => {
+				if (!this.tabClickWasOnActive || id !== this.activeTab) return;
+				void this.collapseAllInTab(id);
 			};
 			// Each tab has a header half (fixed region) and a body half (scrolling region).
 			const pane: TabPane = {
@@ -939,6 +955,11 @@ class WorldBuilderView extends ItemView {
 				header.setAttribute("aria-expanded", String(!collapsed));
 			};
 			applyCollapsed(this.plugin.settings.collapsedEmployers.includes(key));
+			this.groupCollapsers.set(header, () => {
+				const settings = this.plugin.settings;
+				if (!settings.collapsedEmployers.includes(key)) settings.collapsedEmployers = [...settings.collapsedEmployers, key];
+				applyCollapsed(true);
+			});
 
 			const toggleCollapsed = async () => {
 				// While searching, matching sections are shown open regardless; leave the saved state alone.
@@ -1060,6 +1081,11 @@ class WorldBuilderView extends ItemView {
 				header.setAttribute("aria-expanded", String(!collapsed));
 			};
 			applyCollapsed(this.plugin.settings.collapsedEmployerTypes.includes(key));
+			this.groupCollapsers.set(header, () => {
+				const settings = this.plugin.settings;
+				if (!settings.collapsedEmployerTypes.includes(key)) settings.collapsedEmployerTypes = [...settings.collapsedEmployerTypes, key];
+				applyCollapsed(true);
+			});
 
 			const toggleCollapsed = async () => {
 				// While searching, matching sections are shown open regardless; leave the saved state alone.
@@ -1141,6 +1167,11 @@ class WorldBuilderView extends ItemView {
 			header.setAttribute("aria-expanded", String(!collapsed));
 		};
 		applyCollapsed(this.plugin.settings.collapsedSubsidiaries.includes(path));
+		this.groupCollapsers.set(header, () => {
+			const settings = this.plugin.settings;
+			if (!settings.collapsedSubsidiaries.includes(path)) settings.collapsedSubsidiaries = [...settings.collapsedSubsidiaries, path];
+			applyCollapsed(true);
+		});
 
 		const toggleCollapsed = async () => {
 			// While searching, matching sections are shown open regardless; leave the saved state alone.
@@ -1258,6 +1289,11 @@ class WorldBuilderView extends ItemView {
 			await this.plugin.saveSettings();
 		};
 		this.treeExpanders.set(path, () => setCollapsed(false));
+		this.groupCollapsers.set(header, () => {
+			const settings = this.plugin.settings;
+			if (!settings.collapsedParents.includes(path)) settings.collapsedParents = [...settings.collapsedParents, path];
+			apply(true);
+		});
 
 		const toggle = () => {
 			// While searching, matching entries are shown open regardless; leave the saved state alone.
@@ -1427,6 +1463,39 @@ class WorldBuilderView extends ItemView {
 		editBtn.onclick = () => this.app.workspace.getLeaf().openFile(entry.file);
 
 		this.recordNav(tab, entry.file.path);
+	}
+
+	/**
+	 * "Collapse all" for one section, triggered by double-clicking its (already active) tab button:
+	 * closes every expanded card preview and folds every collapsible group label in the section
+	 * (employer groups on Characters, type groups and Subsidiaries on Employers, every tree label
+	 * and the Ships section on Locations). The folded state is saved like a manual fold. While a
+	 * search is active the matching entries still show (as with a manual fold); the saved state
+	 * takes over once the search is cleared.
+	 */
+	private async collapseAllInTab(tab: SectionTab) {
+		const pane = this.tabContents[tab];
+		if (!pane) return;
+
+		let closedCard = false;
+		pane.body.querySelectorAll<HTMLElement>(".wb-card.wb-card-expanded").forEach((card) => {
+			card.querySelector(":scope > .wb-card-expand")?.remove();
+			card.removeClass("wb-card-expanded");
+			card.setAttribute("aria-expanded", "false");
+			closedCard = true;
+		});
+		if (closedCard) this.recordNav(tab, null);
+
+		let folded = false;
+		pane.body.querySelectorAll<HTMLElement>(".wb-group-header").forEach((header) => {
+			const collapse = this.groupCollapsers.get(header);
+			if (!collapse) return;
+			collapse();
+			folded = true;
+		});
+		this.refreshCurrentCardHighlight();
+		this.updateShadowFn?.();
+		if (folded) await this.plugin.saveSettings();
 	}
 
 	/** The section folder a tab's notes live in, e.g. "World/Characters". */
