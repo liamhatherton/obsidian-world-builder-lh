@@ -29,6 +29,7 @@ var DEFAULT_SETTINGS = {
   collapsedEmployers: [],
   collapsedEmployerTypes: [],
   collapsedParents: [],
+  collapsedSubsidiaries: [],
   sectionOrder: {},
   bookmarks: [],
   collapsedBookmarkGroups: []
@@ -42,6 +43,7 @@ var EMPLOYER_TYPES = [
 function slugify(s) {
   return s.replace(/[/\\:*?"<>|#^[\]]/g, "-").trim();
 }
+var SUBSIDIARY_OF = "subsidiary-of";
 function isShip(fm) {
   var _a;
   return ((_a = fm.type) != null ? _a : "").trim().toLowerCase() === "ship";
@@ -595,7 +597,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         }
       });
     } else {
-      body.querySelectorAll(".wb-group-header").forEach((header) => {
+      body.querySelectorAll(".wb-group-header:not(.wb-subsidiary-header)").forEach((header) => {
         const list = header.nextElementSibling;
         if (!list || !list.classList.contains("wb-list")) return;
         const shown = filterList(list);
@@ -609,6 +611,13 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         if ((_a2 = list.previousElementSibling) == null ? void 0 : _a2.classList.contains("wb-group-header")) return;
         matches += filterList(list);
       });
+      const subGroups = Array.from(body.querySelectorAll(".wb-subsidiary-group")).reverse();
+      for (const group of subGroups) {
+        const anyShown = !!group.querySelector(":scope > .wb-list > .wb-card:not(.wb-filtered-out)");
+        group.classList.toggle("wb-filtered-out", searching && !anyShown);
+        const owner = group.previousElementSibling;
+        if (searching && anyShown && (owner == null ? void 0 : owner.classList.contains("wb-card"))) owner.classList.remove("wb-filtered-out");
+      }
     }
     const none = body.querySelector(".wb-no-results");
     if (none) {
@@ -836,12 +845,29 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
    * with employers that have no recognised type in an "Unassigned" section last. Headers use the
    * same chevron as the Characters employer groups, without a logo. Each section is its own
    * drag-to-reorder list; its order is merged back into the tab's single saved order.
+   *
+   * An employer whose `subsidiary-of` property names another employer on this tab (matched on
+   * that employer's `name`, tolerant of "[[Name]]" syntax, case and accents) is not listed in its
+   * own type section: it is drawn under its parent's card, inside a collapsible "Subsidiaries"
+   * label, whatever its own `type` says. If the parent can't be found (unset, misspelled, not an
+   * employer, or part of a loop), the entry falls back to its `type` section as usual.
    */
   renderTypeGroups(tab, container, entries, getCard, opts) {
-    var _a, _b;
+    var _a;
     const known = new Set(EMPLOYER_TYPES.map((t) => t.key));
+    const { roots, childrenOf } = buildParentTree(
+      entries,
+      (fm) => {
+        var _a2;
+        return (_a2 = fm[SUBSIDIARY_OF]) != null ? _a2 : "";
+      },
+      (fm) => {
+        var _a2;
+        return (_a2 = fm.name) != null ? _a2 : "";
+      }
+    );
     const groups = /* @__PURE__ */ new Map();
-    for (const entry of entries) {
+    for (const entry of roots) {
       const raw = ((_a = entry.fm.type) != null ? _a : "").trim().toLowerCase();
       const key = known.has(raw) ? raw : "";
       if (!groups.has(key)) groups.set(key, []);
@@ -876,16 +902,65 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
           toggleCollapsed();
         }
       };
-      const items = this.orderEntries(groups.get(key), (_b = this.plugin.settings.sectionOrder[tab]) != null ? _b : []);
-      for (const entry of items) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
-      this.enableReorder(list, async (order) => {
-        var _a2;
-        const settings = this.plugin.settings;
-        const baseline = this.orderEntries(entries, (_a2 = settings.sectionOrder[tab]) != null ? _a2 : []).map((e) => e.file.path);
-        settings.sectionOrder[tab] = mergeGroupOrder(baseline, items.map((e) => e.file.path), order);
-        await this.plugin.saveSettings();
-      });
+      this.renderEmployerList(tab, list, groups.get(key), entries, childrenOf, getCard, opts);
     }
+  }
+  /**
+   * Draws one drag-to-reorder list of employer cards (a type section, or one parent's
+   * subsidiaries). Any card with subsidiaries gets a `.wb-child-group` right after it holding a
+   * collapsible "Subsidiaries" label and their own nested list, drawn the same way (so a
+   * subsidiary's own subsidiaries nest one level further in). The child group follows its card
+   * when it is dragged, and subsidiaries can only be reordered among themselves.
+   */
+  renderEmployerList(tab, list, groupEntries, allEntries, childrenOf, getCard, opts) {
+    var _a;
+    const items = this.orderEntries(groupEntries, (_a = this.plugin.settings.sectionOrder[tab]) != null ? _a : []);
+    for (const entry of items) {
+      this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
+      const kids = childrenOf.get(entry.file.path);
+      if (kids && kids.length) this.renderSubsidiaries(tab, list, entry, kids, allEntries, childrenOf, getCard, opts);
+    }
+    this.enableReorder(list, async (order) => {
+      var _a2;
+      const settings = this.plugin.settings;
+      const baseline = this.orderEntries(allEntries, (_a2 = settings.sectionOrder[tab]) != null ? _a2 : []).map((e) => e.file.path);
+      settings.sectionOrder[tab] = mergeGroupOrder(baseline, items.map((e) => e.file.path), order);
+      await this.plugin.saveSettings();
+    });
+  }
+  /** The collapsible "Subsidiaries" label (and its nested list) drawn right under a parent employer's card. */
+  renderSubsidiaries(tab, list, parent, kids, allEntries, childrenOf, getCard, opts) {
+    const path = parent.file.path;
+    const group = list.createDiv("wb-child-group wb-subsidiary-group");
+    const header = group.createDiv("wb-group-header wb-subsidiary-header");
+    header.setAttribute("role", "button");
+    header.setAttribute("tabindex", "0");
+    (0, import_obsidian.setIcon)(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
+    header.createEl("span", { cls: "wb-group-title", text: "Subsidiaries" });
+    header.createEl("span", { cls: "wb-group-count", text: String(kids.length) });
+    const subList = group.createDiv("wb-list");
+    const applyCollapsed = (collapsed) => {
+      header.classList.toggle("is-collapsed", collapsed);
+      subList.classList.toggle("is-collapsed", collapsed);
+      header.setAttribute("aria-expanded", String(!collapsed));
+    };
+    applyCollapsed(this.plugin.settings.collapsedSubsidiaries.includes(path));
+    const toggleCollapsed = async () => {
+      if (normalizeForSearch(this.searchQueries[tab]).trim()) return;
+      const settings = this.plugin.settings;
+      const collapse = !settings.collapsedSubsidiaries.includes(path);
+      settings.collapsedSubsidiaries = collapse ? [...settings.collapsedSubsidiaries, path] : settings.collapsedSubsidiaries.filter((p) => p !== path);
+      applyCollapsed(collapse);
+      await this.plugin.saveSettings();
+    };
+    header.onclick = toggleCollapsed;
+    header.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggleCollapsed();
+      }
+    };
+    this.renderEmployerList(tab, subList, kids, allEntries, childrenOf, getCard, opts);
   }
   /**
    * Applies a saved manual order (a list of note paths, earliest first) to a set of entries.
@@ -1328,13 +1403,13 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
    * a direct click would), and scrolls it into view.
    */
   revealCard(tab, path) {
-    var _a, _b;
+    var _a, _b, _c, _d;
     const pane = this.tabContents[tab];
     if (!pane) return;
     const card = pane.body.querySelector(`.wb-card[data-path="${CSS.escape(path)}"]`);
     if (!card) return;
-    const list = card.closest(".wb-list");
-    if (list == null ? void 0 : list.classList.contains("is-collapsed")) {
+    for (let list = card.closest(".wb-list"); list && list !== pane.body; list = (_b = (_a = list.parentElement) == null ? void 0 : _a.closest(".wb-list")) != null ? _b : null) {
+      if (!list.classList.contains("is-collapsed")) continue;
       list.removeClass("is-collapsed");
       const header = list.previousElementSibling;
       if (header instanceof HTMLElement && header.classList.contains("wb-group-header")) {
@@ -1345,12 +1420,12 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     for (let el = card; el && el !== pane.body; el = el.parentElement) {
       if (!el.classList.contains("wb-tree-hidden")) continue;
       const owner = el.getAttribute("data-tree-owner");
-      if (owner) void ((_a = this.treeExpanders.get(owner)) == null ? void 0 : _a());
+      if (owner) void ((_c = this.treeExpanders.get(owner)) == null ? void 0 : _c());
     }
     if (card.classList.contains("wb-filtered-out") && this.searchQueries[tab]) {
       this.searchQueries[tab] = "";
       this.applySearch(tab);
-      if (tab === this.activeTab) (_b = this.showTabSearchFn) == null ? void 0 : _b.call(this);
+      if (tab === this.activeTab) (_d = this.showTabSearchFn) == null ? void 0 : _d.call(this);
     }
     if (!card.classList.contains("wb-card-expanded")) {
       const entry = this.entryByPath.get(path);
@@ -1649,6 +1724,7 @@ var EmployerModal = class extends import_obsidian.Modal {
     this.data = {
       name: "",
       type: "corporation",
+      subsidiaryOf: "",
       alignment: "neutral",
       goals: "",
       enemies: "",
@@ -1669,6 +1745,20 @@ var EmployerModal = class extends import_obsidian.Modal {
       EMPLOYER_TYPES.forEach(({ key, label }) => d.addOption(key, label));
       d.setValue(this.data.type);
       d.onChange((v) => this.data.type = v);
+    });
+    const folder = `${this.plugin.settings.worldFolder}/Employers/`;
+    const existing = Array.from(new Set(
+      this.app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(folder)).map((f) => {
+        var _a, _b;
+        const name = (_b = (_a = this.app.metadataCache.getFileCache(f)) == null ? void 0 : _a.frontmatter) == null ? void 0 : _b.name;
+        return typeof name === "string" && name.trim() ? name.trim() : f.basename;
+      })
+    )).sort((a, b) => a.localeCompare(b));
+    new import_obsidian.Setting(contentEl).setName("Subsidiary of").setDesc("Nests this employer under its parent's Subsidiaries label instead of its Type section.").addDropdown((d) => {
+      d.addOption("", "None");
+      existing.forEach((n) => d.addOption(n, n));
+      d.setValue(this.data.subsidiaryOf);
+      d.onChange((v) => this.data.subsidiaryOf = v);
     });
     new import_obsidian.Setting(contentEl).setName("Alignment").addDropdown((d) => {
       ["lawful", "neutral", "chaotic"].forEach(
@@ -1708,6 +1798,7 @@ var EmployerModal = class extends import_obsidian.Modal {
       "---",
       `name: "${this.data.name}"`,
       `type: ${this.data.type}`,
+      `${SUBSIDIARY_OF}: "${this.data.subsidiaryOf.replace(/"/g, "'")}"`,
       `alignment: ${this.data.alignment}`,
       `goals: "${this.data.goals.replace(/"/g, "'")}"`,
       `entry_type: employer`,
@@ -1716,6 +1807,7 @@ var EmployerModal = class extends import_obsidian.Modal {
       `# ${this.data.name}`,
       "",
       `**Type:** ${(_b = (_a = EMPLOYER_TYPES.find((t) => t.key === this.data.type)) == null ? void 0 : _a.label) != null ? _b : this.data.type}`,
+      ...this.data.subsidiaryOf ? [`**Subsidiary of:** [[${this.data.subsidiaryOf}]]`] : [],
       `**Alignment:** ${this.data.alignment}`
     ];
     if (enemyLinks) lines.push(`**Enemies:** ${enemyLinks}`);
@@ -1924,6 +2016,11 @@ var WorldBuilderPlugin = class extends import_obsidian.Plugin {
             changed = true;
           }
         }
+        const sub = this.settings.collapsedSubsidiaries.indexOf(oldPath);
+        if (sub !== -1) {
+          this.settings.collapsedSubsidiaries[sub] = file.path;
+          changed = true;
+        }
         const b = this.settings.bookmarks.indexOf(oldPath);
         if (b !== -1) {
           this.settings.bookmarks[b] = file.path;
@@ -1958,16 +2055,17 @@ var WorldBuilderPlugin = class extends import_obsidian.Plugin {
     }
   }
   async loadSettings() {
-    var _a, _b, _c, _d, _e, _f, _g;
+    var _a, _b, _c, _d, _e, _f, _g, _h;
     const data = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
     this.settings.characterOrder = (_a = data == null ? void 0 : data.characterOrder) != null ? _a : {};
     this.settings.collapsedEmployers = (_b = data == null ? void 0 : data.collapsedEmployers) != null ? _b : [];
     this.settings.collapsedEmployerTypes = (_c = data == null ? void 0 : data.collapsedEmployerTypes) != null ? _c : [];
     this.settings.collapsedParents = (_d = data == null ? void 0 : data.collapsedParents) != null ? _d : [];
-    this.settings.sectionOrder = (_e = data == null ? void 0 : data.sectionOrder) != null ? _e : {};
-    this.settings.bookmarks = (_f = data == null ? void 0 : data.bookmarks) != null ? _f : [];
-    this.settings.collapsedBookmarkGroups = (_g = data == null ? void 0 : data.collapsedBookmarkGroups) != null ? _g : [];
+    this.settings.collapsedSubsidiaries = (_e = data == null ? void 0 : data.collapsedSubsidiaries) != null ? _e : [];
+    this.settings.sectionOrder = (_f = data == null ? void 0 : data.sectionOrder) != null ? _f : {};
+    this.settings.bookmarks = (_g = data == null ? void 0 : data.bookmarks) != null ? _g : [];
+    this.settings.collapsedBookmarkGroups = (_h = data == null ? void 0 : data.collapsedBookmarkGroups) != null ? _h : [];
   }
   async saveSettings() {
     await this.saveData(this.settings);

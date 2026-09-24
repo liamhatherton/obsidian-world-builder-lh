@@ -8,7 +8,7 @@ A fiction world-building toolkit for Obsidian: characters, locations, employers,
 
 - **Characters** — name, role, age, employer, ship, home, physical description, personality, goals
 - **Locations** — name, type, parent location, description, inhabitants, secrets
-- **Employers** — name, alignment, goals, enemies, allies, description
+- **Employers** — name, type, subsidiary of, alignment, goals, enemies, allies, description
 - **Lore Entries** — title, category (history/tech/religion/culture/other), content
 - **Timeline Events** — date/era, title, description, linked characters/locations
 - **World Sidebar** — tabbed view across all five entry types
@@ -48,7 +48,7 @@ Everything below was added or changed in this fork (by liamhatherton), compiled 
 15. **Hierarchical Locations tab.** Locations nest under their `parent` location (plain names and `[[wiki links]]` both work, and cycles are ignored). Each level can be reordered separately, and dragging a parent moves its whole subtree with it.
 16. **Collapsible location tree.** Every location has a collapsible label, and collapsing a parent hides its subtree. Nested labels keep their own saved state.
 17. **Ships section.** Ship-type locations are never nested because they move around. They get their own collapsible Ships section at the bottom of Locations.
-18. **Employers grouped by type** into collapsible Corporation / Government / Military / Criminal / Unassigned sections, each with its own drag-to-reorder list.
+18. **Employers grouped by type** into collapsible Corporation / Government / Military / Criminal / Unassigned sections, each with its own drag-to-reorder list. An employer with a `subsidiary-of` property (set from the New Employer form, or by hand; plain names and `[[wiki links]]` both work) is shown under its parent's card in a collapsible **Subsidiaries** label instead of its own type section. If the parent can't be found, it stays in its type section.
 
 ### Navigation and search
 

@@ -558,3 +558,14 @@
 .wb-icon-btn.is-active svg {
 	fill: currentColor;
 }
+
+/*
+ * Employers: a parent employer's subsidiaries sit in an indented .wb-child-group right under its
+ * card, headed by a collapsible "Subsidiaries" label (same chevron look as the type headers).
+ */
+.wb-subsidiary-group > .wb-group-header.wb-subsidiary-header { margin: 2px 0 6px; }
+.wb-group-count {
+	margin-left: 4px;
+	font-weight: 400;
+	color: var(--text-faint);
+}

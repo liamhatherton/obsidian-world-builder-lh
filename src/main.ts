@@ -24,6 +24,8 @@ interface WorldBuilderSettings {
 	collapsedEmployerTypes: string[];
 	/** Note paths of parent entries on hierarchical tabs (Locations) whose subtree is collapsed. */
 	collapsedParents: string[];
+	/** Note paths of employers whose nested "Subsidiaries" label is collapsed on the Employers tab. */
+	collapsedSubsidiaries: string[];
 	/** Custom manual order for the flat (non-Characters) tabs, keyed by tab id -> ordered note paths. */
 	sectionOrder: Partial<Record<WBTab, string[]>>;
 	/** Bookmarked note paths (any section), in the order they were added or dragged into. */
@@ -37,6 +39,7 @@ const DEFAULT_SETTINGS: WorldBuilderSettings = {
 	collapsedEmployers: [],
 	collapsedEmployerTypes: [],
 	collapsedParents: [],
+	collapsedSubsidiaries: [],
 	sectionOrder: {},
 	bookmarks: [],
 	collapsedBookmarkGroups: [],
@@ -55,6 +58,9 @@ const EMPLOYER_TYPES: { key: string; label: string }[] = [
 function slugify(s: string) {
 	return s.replace(/[/\\:*?"<>|#^[\]]/g, "-").trim();
 }
+
+/** Employer frontmatter key naming the employer this one is a subsidiary of. */
+const SUBSIDIARY_OF = "subsidiary-of";
 
 /** Locations whose `type` is "ship": mobile, so they get their own Ships section instead of nesting. */
 function isShip(fm: Record<string, string>): boolean {
@@ -726,7 +732,7 @@ class WorldBuilderView extends ItemView {
 				}
 			});
 		} else {
-			body.querySelectorAll<HTMLElement>(".wb-group-header").forEach((header) => {
+			body.querySelectorAll<HTMLElement>(".wb-group-header:not(.wb-subsidiary-header)").forEach((header) => {
 				const list = header.nextElementSibling;
 				if (!list || !list.classList.contains("wb-list")) return;
 				const shown = filterList(list);
@@ -740,6 +746,16 @@ class WorldBuilderView extends ItemView {
 				if (list.previousElementSibling?.classList.contains("wb-group-header")) return;
 				matches += filterList(list);
 			});
+			// Employers: a "Subsidiaries" label stays only while something inside it matches, and
+			// keeps its parent's card in view for context. Deepest first (reverse document order),
+			// so a nested match has already revealed its own parent card before the level above looks.
+			const subGroups = Array.from(body.querySelectorAll<HTMLElement>(".wb-subsidiary-group")).reverse();
+			for (const group of subGroups) {
+				const anyShown = !!group.querySelector(":scope > .wb-list > .wb-card:not(.wb-filtered-out)");
+				group.classList.toggle("wb-filtered-out", searching && !anyShown);
+				const owner = group.previousElementSibling;
+				if (searching && anyShown && owner?.classList.contains("wb-card")) owner.classList.remove("wb-filtered-out");
+			}
 		}
 
 		const none = body.querySelector<HTMLElement>(".wb-no-results");
@@ -1000,6 +1016,12 @@ class WorldBuilderView extends ItemView {
 	 * with employers that have no recognised type in an "Unassigned" section last. Headers use the
 	 * same chevron as the Characters employer groups, without a logo. Each section is its own
 	 * drag-to-reorder list; its order is merged back into the tab's single saved order.
+	 *
+	 * An employer whose `subsidiary-of` property names another employer on this tab (matched on
+	 * that employer's `name`, tolerant of "[[Name]]" syntax, case and accents) is not listed in its
+	 * own type section: it is drawn under its parent's card, inside a collapsible "Subsidiaries"
+	 * label, whatever its own `type` says. If the parent can't be found (unset, misspelled, not an
+	 * employer, or part of a loop), the entry falls back to its `type` section as usual.
 	 */
 	private renderTypeGroups(
 		tab: WBTab,
@@ -1009,8 +1031,14 @@ class WorldBuilderView extends ItemView {
 		opts: { thumbs?: boolean; stackBadge?: boolean; expandable?: boolean }
 	) {
 		const known = new Set(EMPLOYER_TYPES.map((t) => t.key));
+		// Only entries whose parent was actually found are nested; everything else is a root.
+		const { roots, childrenOf } = buildParentTree(
+			entries,
+			(fm) => fm[SUBSIDIARY_OF] ?? "",
+			(fm) => fm.name ?? ""
+		);
 		const groups = new Map<string, NoteEntry[]>();
-		for (const entry of entries) {
+		for (const entry of roots) {
 			const raw = (entry.fm.type ?? "").trim().toLowerCase();
 			const key = known.has(raw) ? raw : "";
 			if (!groups.has(key)) groups.set(key, []);
@@ -1052,15 +1080,88 @@ class WorldBuilderView extends ItemView {
 				}
 			};
 
-			const items = this.orderEntries(groups.get(key)!, this.plugin.settings.sectionOrder[tab] ?? []);
-			for (const entry of items) this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
-			this.enableReorder(list, async (order) => {
-				const settings = this.plugin.settings;
-				const baseline = this.orderEntries(entries, settings.sectionOrder[tab] ?? []).map((e) => e.file.path);
-				settings.sectionOrder[tab] = mergeGroupOrder(baseline, items.map((e) => e.file.path), order);
-				await this.plugin.saveSettings();
-			});
+			this.renderEmployerList(tab, list, groups.get(key)!, entries, childrenOf, getCard, opts);
 		}
+	}
+
+	/**
+	 * Draws one drag-to-reorder list of employer cards (a type section, or one parent's
+	 * subsidiaries). Any card with subsidiaries gets a `.wb-child-group` right after it holding a
+	 * collapsible "Subsidiaries" label and their own nested list, drawn the same way (so a
+	 * subsidiary's own subsidiaries nest one level further in). The child group follows its card
+	 * when it is dragged, and subsidiaries can only be reordered among themselves.
+	 */
+	private renderEmployerList(
+		tab: WBTab,
+		list: HTMLElement,
+		groupEntries: NoteEntry[],
+		allEntries: NoteEntry[],
+		childrenOf: Map<string, NoteEntry[]>,
+		getCard: CardFn,
+		opts: { thumbs?: boolean; stackBadge?: boolean; expandable?: boolean }
+	) {
+		const items = this.orderEntries(groupEntries, this.plugin.settings.sectionOrder[tab] ?? []);
+		for (const entry of items) {
+			this.renderCard(tab, list, entry, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable);
+			const kids = childrenOf.get(entry.file.path);
+			if (kids && kids.length) this.renderSubsidiaries(tab, list, entry, kids, allEntries, childrenOf, getCard, opts);
+		}
+		this.enableReorder(list, async (order) => {
+			const settings = this.plugin.settings;
+			const baseline = this.orderEntries(allEntries, settings.sectionOrder[tab] ?? []).map((e) => e.file.path);
+			settings.sectionOrder[tab] = mergeGroupOrder(baseline, items.map((e) => e.file.path), order);
+			await this.plugin.saveSettings();
+		});
+	}
+
+	/** The collapsible "Subsidiaries" label (and its nested list) drawn right under a parent employer's card. */
+	private renderSubsidiaries(
+		tab: WBTab,
+		list: HTMLElement,
+		parent: NoteEntry,
+		kids: NoteEntry[],
+		allEntries: NoteEntry[],
+		childrenOf: Map<string, NoteEntry[]>,
+		getCard: CardFn,
+		opts: { thumbs?: boolean; stackBadge?: boolean; expandable?: boolean }
+	) {
+		const path = parent.file.path;
+		const group = list.createDiv("wb-child-group wb-subsidiary-group");
+		const header = group.createDiv("wb-group-header wb-subsidiary-header");
+		header.setAttribute("role", "button");
+		header.setAttribute("tabindex", "0");
+		setIcon(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
+		header.createEl("span", { cls: "wb-group-title", text: "Subsidiaries" });
+		header.createEl("span", { cls: "wb-group-count", text: String(kids.length) });
+		const subList = group.createDiv("wb-list");
+
+		const applyCollapsed = (collapsed: boolean) => {
+			header.classList.toggle("is-collapsed", collapsed);
+			subList.classList.toggle("is-collapsed", collapsed);
+			header.setAttribute("aria-expanded", String(!collapsed));
+		};
+		applyCollapsed(this.plugin.settings.collapsedSubsidiaries.includes(path));
+
+		const toggleCollapsed = async () => {
+			// While searching, matching sections are shown open regardless; leave the saved state alone.
+			if (normalizeForSearch(this.searchQueries[tab]).trim()) return;
+			const settings = this.plugin.settings;
+			const collapse = !settings.collapsedSubsidiaries.includes(path);
+			settings.collapsedSubsidiaries = collapse
+				? [...settings.collapsedSubsidiaries, path]
+				: settings.collapsedSubsidiaries.filter((p) => p !== path);
+			applyCollapsed(collapse);
+			await this.plugin.saveSettings();
+		};
+		header.onclick = toggleCollapsed;
+		header.onkeydown = (e) => {
+			if (e.key === "Enter" || e.key === " ") {
+				e.preventDefault();
+				toggleCollapsed();
+			}
+		};
+
+		this.renderEmployerList(tab, subList, kids, allEntries, childrenOf, getCard, opts);
 	}
 
 	/**
@@ -1593,8 +1694,10 @@ class WorldBuilderView extends ItemView {
 		const card = pane.body.querySelector<HTMLElement>(`.wb-card[data-path="${CSS.escape(path)}"]`);
 		if (!card) return;
 
-		const list = card.closest<HTMLElement>(".wb-list");
-		if (list?.classList.contains("is-collapsed")) {
+		// Open every collapsed list the card sits in (an employer group, and on Employers any
+		// "Subsidiaries" labels it is nested under).
+		for (let list = card.closest<HTMLElement>(".wb-list"); list && list !== pane.body; list = list.parentElement?.closest<HTMLElement>(".wb-list") ?? null) {
+			if (!list.classList.contains("is-collapsed")) continue;
 			list.removeClass("is-collapsed");
 			const header = list.previousElementSibling;
 			if (header instanceof HTMLElement && header.classList.contains("wb-group-header")) {
@@ -1922,7 +2025,7 @@ class EmployerModal extends Modal {
 	plugin: WorldBuilderPlugin;
 	onDone: () => void;
 	data = {
-		name: "", type: "corporation", alignment: "neutral", goals: "", enemies: "", allies: "", description: ""
+		name: "", type: "corporation", subsidiaryOf: "", alignment: "neutral", goals: "", enemies: "", allies: "", description: ""
 	};
 
 	constructor(app: App, plugin: WorldBuilderPlugin, onDone: () => void) {
@@ -1944,6 +2047,25 @@ class EmployerModal extends Modal {
 			d.setValue(this.data.type);
 			d.onChange((v) => (this.data.type = v));
 		});
+		// Existing employers (by their `name` property, else the file name), alphabetically.
+		const folder = `${this.plugin.settings.worldFolder}/Employers/`;
+		const existing = Array.from(new Set(
+			this.app.vault.getMarkdownFiles()
+				.filter((f) => f.path.startsWith(folder))
+				.map((f) => {
+					const name = this.app.metadataCache.getFileCache(f)?.frontmatter?.name;
+					return (typeof name === "string" && name.trim()) ? name.trim() : f.basename;
+				})
+		)).sort((a, b) => a.localeCompare(b));
+		new Setting(contentEl)
+			.setName("Subsidiary of")
+			.setDesc("Nests this employer under its parent's Subsidiaries label instead of its Type section.")
+			.addDropdown((d) => {
+				d.addOption("", "None");
+				existing.forEach((n) => d.addOption(n, n));
+				d.setValue(this.data.subsidiaryOf);
+				d.onChange((v) => (this.data.subsidiaryOf = v));
+			});
 		new Setting(contentEl).setName("Alignment").addDropdown((d) => {
 			["lawful", "neutral", "chaotic"].forEach((o) =>
 				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
@@ -1980,6 +2102,7 @@ class EmployerModal extends Modal {
 			"---",
 			`name: "${this.data.name}"`,
 			`type: ${this.data.type}`,
+			`${SUBSIDIARY_OF}: "${this.data.subsidiaryOf.replace(/"/g, "'")}"`,
 			`alignment: ${this.data.alignment}`,
 			`goals: "${this.data.goals.replace(/"/g, "'")}"`,
 			`entry_type: employer`,
@@ -1988,6 +2111,7 @@ class EmployerModal extends Modal {
 			`# ${this.data.name}`,
 			"",
 			`**Type:** ${EMPLOYER_TYPES.find((t) => t.key === this.data.type)?.label ?? this.data.type}`,
+			...(this.data.subsidiaryOf ? [`**Subsidiary of:** [[${this.data.subsidiaryOf}]]`] : []),
 			`**Alignment:** ${this.data.alignment}`,
 		];
 		if (enemyLinks) lines.push(`**Enemies:** ${enemyLinks}`);
@@ -2216,6 +2340,8 @@ export default class WorldBuilderPlugin extends Plugin {
 					const i = order.indexOf(oldPath);
 					if (i !== -1) { order[i] = file.path; changed = true; }
 				}
+				const sub = this.settings.collapsedSubsidiaries.indexOf(oldPath);
+				if (sub !== -1) { this.settings.collapsedSubsidiaries[sub] = file.path; changed = true; }
 				const b = this.settings.bookmarks.indexOf(oldPath);
 				if (b !== -1) { this.settings.bookmarks[b] = file.path; changed = true; }
 				if (changed) await this.saveSettings();
@@ -2257,6 +2383,7 @@ export default class WorldBuilderPlugin extends Plugin {
 		this.settings.collapsedEmployers = data?.collapsedEmployers ?? [];
 		this.settings.collapsedEmployerTypes = data?.collapsedEmployerTypes ?? [];
 		this.settings.collapsedParents = data?.collapsedParents ?? [];
+		this.settings.collapsedSubsidiaries = data?.collapsedSubsidiaries ?? [];
 		this.settings.sectionOrder = data?.sectionOrder ?? {};
 		this.settings.bookmarks = data?.bookmarks ?? [];
 		this.settings.collapsedBookmarkGroups = data?.collapsedBookmarkGroups ?? [];
