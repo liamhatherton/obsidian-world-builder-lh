@@ -143,7 +143,9 @@
  */
 .wb-card-row {
 	display: flex;
-	align-items: center;
+	/* Portrait and text columns both start at the top of the card (not vertically centred), matching
+	   the single-column cards (Lore, Timeline, ...) whose text already starts at the top. */
+	align-items: flex-start;
 	gap: 10px;
 }
 .wb-thumb {
