@@ -401,7 +401,7 @@
 .wb-card-expand-body > :first-child { margin-top: 0; }
 .wb-card-expand-body > :last-child { margin-bottom: 0; }
 
-/* Bookmark (left) and Edit (right): bottom of the expanded area, under its own divider (same darker token as above). */
+/* Bookmark (left) and the action buttons (right): bottom of the expanded area, under its own divider (same darker token as above). */
 .wb-card-expand-footer {
 	display: flex;
 	justify-content: space-between;
@@ -409,6 +409,90 @@
 	margin-top: 10px;
 	padding-top: 10px;
 	border-top: 1px solid var(--wb-expand-divider);
+}
+/* Right-hand button group: [Modify MD] [Edit] while reading, [Cancel] [Save] while editing inline. */
+.wb-card-expand-actions {
+	display: flex;
+	align-items: stretch;
+	gap: 6px;
+}
+.wb-card-expand-actions .wb-btn-primary {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+}
+
+/* Inline markdown editor: replaces the rendered preview while an expanded card is being edited. */
+.wb-card-editor {
+	display: block;
+	width: 100%;
+	min-height: 8em;
+	max-height: 60vh;
+	resize: vertical;
+	box-sizing: border-box;
+	padding: 6px 8px;
+	font-family: var(--font-monospace);
+	font-size: 0.8em;
+	line-height: 1.45;
+	tab-size: 4;
+	color: var(--text-normal);
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	cursor: text;
+}
+.wb-card-editor:focus {
+	border-color: var(--interactive-accent);
+	box-shadow: 0 0 0 1px var(--interactive-accent);
+	outline: none;
+}
+
+/* Live Preview mode: raw Properties (frontmatter YAML) box above Obsidian's own editor for the body. */
+.wb-card-editor-wrap { display: flex; flex-direction: column; gap: 6px; }
+.wb-card-editor-label {
+	font-size: 0.75em;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
+}
+.wb-card-editor.wb-card-editor-props { min-height: 3em; max-height: 30vh; border-radius: 0; }
+.wb-card-editor-body {
+	min-height: 8em;
+	max-height: 60vh;
+	overflow-y: auto;
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 10px;
+	cursor: text;
+}
+.wb-card-editor-body:focus-within {
+	border-color: var(--interactive-accent);
+	box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+/* Live Preview text is drawn 25% smaller than the main editor: createLivePreviewEditor() sets
+   --font-text-size on this box to 75% of the theme's value, and the editor sizes itself from it. */
+.wb-card-editor-body .markdown-source-view { font-size: var(--font-text-size); }
+/* The embedded editor is built for a full pane: let it size to its content and drop the pane margins. */
+.wb-card-editor-body .markdown-source-view,
+.wb-card-editor-body .cm-editor,
+.wb-card-editor-body .cm-scroller { height: auto; min-height: 8em; }
+.wb-card-editor-body .cm-scroller { padding: 6px 8px; overflow: visible; }
+.wb-card-editor-body .cm-sizer {
+	max-width: none !important;
+	margin: 0 !important;
+	padding: 0 !important;
+	min-height: 0 !important;
+}
+.wb-card-editor-body .cm-content { padding: 0; }
+.wb-card-editor-body .cm-editor.cm-focused { outline: none; }
+
+/* Confirm dialog (discard / overwrite inline edits). */
+.wb-confirm-buttons {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 12px;
 }
 
 .wb-badge {

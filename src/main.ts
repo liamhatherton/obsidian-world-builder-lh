@@ -4,8 +4,10 @@ import {
 	MarkdownRenderer,
 	Modal,
 	Notice,
+	Component,
 	Plugin,
 	PluginSettingTab,
+	Scope,
 	Setting,
 	setIcon,
 	TFile,
@@ -32,6 +34,11 @@ interface WorldBuilderSettings {
 	bookmarks: string[];
 	/** Section groups ("characters", "locations", ...) collapsed on the Bookmarks view. */
 	collapsedBookmarkGroups: string[];
+	/**
+	 * Which editor the sidebar's Edit button opens: "live" = Obsidian's Live Preview editor
+	 * (undocumented internal API, see README), "raw" = a plain textarea with the note's raw markdown.
+	 */
+	inlineEditor: "live" | "raw";
 }
 const DEFAULT_SETTINGS: WorldBuilderSettings = {
 	worldFolder: "World",
@@ -43,6 +50,7 @@ const DEFAULT_SETTINGS: WorldBuilderSettings = {
 	sectionOrder: {},
 	bookmarks: [],
 	collapsedBookmarkGroups: [],
+	inlineEditor: "live",
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -414,6 +422,19 @@ class WorldBuilderView extends ItemView {
 	private groupCollapsers = new WeakMap<HTMLElement, () => void>();
 	/** Whether the click that started the current (possible) double-click landed on the tab that was already active. */
 	private tabClickWasOnActive = false;
+	/**
+	 * The one card whose inline markdown editor is open (only one entry is edited at a time).
+	 * finish() saves any changes and leaves edit mode, resolving false if that was cancelled.
+	 */
+	private activeEdit: {
+		card: HTMLElement;
+		isDirty: () => boolean;
+		finish: () => Promise<boolean>;
+		/** Tears the editor down without saving (its card is being collapsed or redrawn). */
+		abandon: () => void;
+	} | null = null;
+	/** Note path whose editor should open as soon as its card is redrawn (after switching edits triggers a save + redraw). */
+	private pendingEditPath: string | null = null;
 
 	// Rebuilt on every render(); let switchTab() and the nav buttons operate without closures.
 	private tabBarEl: HTMLElement | null = null;
@@ -444,10 +465,23 @@ class WorldBuilderView extends ItemView {
 	async onOpen() { await this.render(); }
 	async onClose() {}
 
-	async render() {
+	/**
+	 * Redraws the whole sidebar. With keepExpanded, the cards that were expanded (per tab) are
+	 * re-opened afterwards, e.g. after saving an inline edit, so the saved card stays open.
+	 */
+	async render(opts: { keepExpanded?: boolean } = {}) {
 		const { containerEl } = this;
 		// Only the list area scrolls, so remember its position across the redraw.
 		const scrollTop = containerEl.querySelector<HTMLElement>(".wb-scroll")?.scrollTop ?? 0;
+		const reopen: { tab: WBTab; path: string }[] = [];
+		if (opts.keepExpanded) {
+			for (const [tab, pane] of Object.entries(this.tabContents) as [WBTab, TabPane][]) {
+				pane.body.querySelectorAll<HTMLElement>(".wb-card.wb-card-expanded").forEach((card) => {
+					const path = card.getAttribute("data-path");
+					if (path) reopen.push({ tab, path });
+				});
+			}
+		}
 		const oldSearch = containerEl.querySelector<HTMLInputElement>(".wb-search-input");
 		const searchHadFocus = !!oldSearch && containerEl.ownerDocument.activeElement === oldSearch;
 		containerEl.empty();
@@ -455,6 +489,9 @@ class WorldBuilderView extends ItemView {
 		// Rebuilt below as the lists are (re)drawn.
 		this.entryByPath = new Map();
 		this.treeExpanders = new Map();
+		// The old DOM (and any open inline editor in it) is gone.
+		this.activeEdit?.abandon();
+		this.activeEdit = null;
 		this.navButtons = [];
 		this.bookmarkHeaderButtons = [];
 		this.sectionConfigs = {};
@@ -665,6 +702,21 @@ class WorldBuilderView extends ItemView {
 		// Bookmarks last: it reuses the entries and card styles the sections above just loaded.
 		this.renderSectionHeader(bookmarksPane, "Bookmarks", null, true);
 		this.renderBookmarks();
+
+		// Re-open the cards that were expanded before the redraw, without adding history entries.
+		if (reopen.length) {
+			this.restoringNav = true;
+			try {
+				for (const { tab, path } of reopen) {
+					const card = contents[tab]?.body.querySelector<HTMLElement>(`.wb-card[data-path="${CSS.escape(path)}"]`);
+					const entry = this.entryByPath.get(path);
+					if (card && entry && !card.classList.contains("wb-card-expanded")) this.toggleCardExpand(tab, card, entry);
+				}
+			} finally {
+				this.restoringNav = false;
+			}
+			this.refreshCurrentCardHighlight();
+		}
 
 		// Redrawing empties the container, which resets its scroll position; restore it.
 		scroll.scrollTop = scrollTop;
@@ -1401,11 +1453,20 @@ class WorldBuilderView extends ItemView {
 
 	/**
 	 * Expands a card in place to show the note's text (no images) instead of opening it in the
-	 * editor, so writing in the main pane isn't interrupted. An Edit button in the expanded area
-	 * still opens the note the normal way. Clicking the card again (or its chevron) collapses it.
+	 * editor, so writing in the main pane isn't interrupted. Modify MD in the expanded area opens
+	 * the note the normal way; Edit edits its markdown inline. Clicking the card again (or its chevron) collapses it.
 	 */
-	private toggleCardExpand(tab: WBTab, card: HTMLElement, entry: NoteEntry) {
+	private toggleCardExpand(tab: WBTab, card: HTMLElement, entry: NoteEntry, force = false) {
 		const wasExpanded = card.classList.contains("wb-card-expanded");
+		// Collapsing a card mid-edit would throw the edits away: ask first.
+		const editingThis = this.activeEdit?.card === card;
+		if (wasExpanded && !force && editingThis && this.activeEdit!.isDirty()) {
+			void confirmModal(this.app, "Discard changes?", `Your edits to "${entry.file.basename}" haven't been saved.`, "Discard").then((ok) => {
+				if (ok) this.toggleCardExpand(tab, card, entry, true);
+			});
+			return;
+		}
+		if (editingThis) { this.activeEdit!.abandon(); this.activeEdit = null; }
 		card.querySelector(":scope > .wb-card-expand")?.remove();
 		card.removeClass("wb-card-expanded");
 		card.setAttribute("aria-expanded", "false");
@@ -1448,7 +1509,8 @@ class WorldBuilderView extends ItemView {
 			if (href) this.followWikiLink(href, entry.file.path);
 		});
 
-		// Bookmark (left) and Edit (right) sit at the bottom, under their own divider, so they don't compete with the text.
+		// Bookmark (left); Modify MD + Edit (right). They sit at the bottom, under their own divider,
+		// so they don't compete with the text.
 		const footer = expand.createDiv("wb-card-expand-footer");
 		const bookmarkBtn = footer.createEl("button", {
 			cls: "wb-btn-secondary wb-icon-btn wb-bookmark-toggle",
@@ -1457,10 +1519,156 @@ class WorldBuilderView extends ItemView {
 		setIcon(bookmarkBtn, "bookmark");
 		this.syncBookmarkToggle(bookmarkBtn, this.plugin.settings.bookmarks.includes(entry.file.path));
 		bookmarkBtn.onclick = () => this.toggleBookmark(entry.file.path);
-		const editBtn = footer.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
-		setIcon(editBtn.createEl("span", { cls: "wb-btn-icon" }), "pencil");
-		editBtn.createEl("span", { text: "Edit" });
-		editBtn.onclick = () => this.app.workspace.getLeaf().openFile(entry.file);
+
+		// Right-hand group: [Modify MD] [Edit] while reading, swapped for [Cancel] [Save] while editing inline.
+		const actions = footer.createDiv("wb-card-expand-actions");
+		const showViewActions = () => {
+			actions.empty();
+			// Modify MD: opens the note in the main editor (what Edit used to do).
+			const modifyBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
+			setIcon(modifyBtn.createEl("span", { cls: "wb-btn-icon" }), "file-text");
+			modifyBtn.createEl("span", { text: "Modify MD" });
+			modifyBtn.onclick = () => this.app.workspace.getLeaf().openFile(entry.file);
+			// Edit: edits the note's markdown right here in the sidebar.
+			const editBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
+			setIcon(editBtn.createEl("span", { cls: "wb-btn-icon" }), "pencil");
+			editBtn.createEl("span", { text: "Edit" });
+			editBtn.onclick = () => void runExclusive(startEditing);
+		};
+		const showEditActions = () => {
+			actions.empty();
+			const cancelBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
+			setIcon(cancelBtn.createEl("span", { cls: "wb-btn-icon" }), "x");
+			cancelBtn.createEl("span", { text: "Cancel" });
+			cancelBtn.onclick = () => void runExclusive(discard);
+			const saveBtn = actions.createEl("button", { cls: "wb-btn-primary", attr: { type: "button" } });
+			setIcon(saveBtn.createEl("span", { cls: "wb-btn-icon" }), "check");
+			saveBtn.createEl("span", { text: "Save" });
+			saveBtn.onclick = () => void runExclusive(finishEditing);
+		};
+
+		/**
+		 * Inline editor: swaps the rendered preview for an editor holding the note's markdown.
+		 * Normally that's Obsidian's own Live Preview editor (see createLivePreviewEditor), with the
+		 * frontmatter in a small raw "Properties" box above it; if that can't be created, or the
+		 * "Sidebar editor" setting is "Raw markdown", it's a plain textarea with the whole file.
+		 * Save (or Mod+S / Mod+Enter) writes the changes and returns to the preview; the sidebar is
+		 * redrawn so a changed name, role, employer etc. shows on the card straight away. Cancel (or
+		 * Escape) discards them, asking first if anything changed. Only one entry is edited at a time:
+		 * opening the editor on another card saves and closes this one.
+		 */
+		let editor: InlineEditor | null = null;
+		let original = "";
+		let busy = false;
+		/** Runs one editor action at a time, so a double-click can't save or open twice. */
+		const runExclusive = async (fn: () => Promise<unknown>) => {
+			if (busy) return;
+			busy = true;
+			try { await fn(); } finally { busy = false; }
+		};
+		const isDirty = () => !!editor && editor.isDirty();
+
+		const stopEditing = () => {
+			if (this.activeEdit?.card === card) this.activeEdit = null;
+			editor?.destroy();
+			editor = null;
+			body.show();
+			expand.removeClass("is-editing");
+			showViewActions();
+		};
+
+		const startEditing = async () => {
+			// Only one entry is edited at a time: close (and save) the one already open first.
+			const other = this.activeEdit;
+			if (other && other.card !== card) {
+				// If saving it redraws the sidebar, this card is rebuilt and its editor opens from there.
+				this.pendingEditPath = entry.file.path;
+				const ok = await other.finish();
+				if (!ok || !card.isConnected) {
+					if (!ok) this.pendingEditPath = null;
+					return;
+				}
+				this.pendingEditPath = null;
+			}
+			try {
+				original = await this.app.vault.read(entry.file);
+			} catch (err) {
+				new Notice(`Couldn't read "${entry.file.basename}".`);
+				return;
+			}
+			if (!card.isConnected || !expand.isConnected || editor) return;
+
+			expand.addClass("is-editing");
+			showEditActions();
+			body.hide();
+			const keys: InlineEditorKeys = {
+				save: () => void runExclusive(finishEditing),
+				cancel: () => void runExclusive(discard),
+			};
+			editor =
+				(this.plugin.settings.inlineEditor === "live"
+					? createLivePreviewEditor(this.app, this, body, entry.file, original, keys)
+					: null) ?? createRawEditor(body, entry.file, original, keys);
+			this.activeEdit = {
+				card,
+				isDirty,
+				finish: async () => {
+					await finishEditing();
+					return !editor || !card.isConnected;
+				},
+				abandon: () => {
+					editor?.destroy();
+					editor = null;
+				},
+			};
+			editor.focus();
+		};
+
+		const discard = async () => {
+			if (isDirty() && !(await confirmModal(this.app, "Discard changes?", `Your edits to "${entry.file.basename}" haven't been saved.`, "Discard"))) {
+				editor?.focus();
+				return;
+			}
+			stopEditing();
+		};
+
+		/** Leaves edit mode, saving first if anything changed. */
+		const finishEditing = async () => {
+			if (!editor) return;
+			if (!isDirty()) { stopEditing(); return; }
+			try {
+				// Don't silently overwrite changes made elsewhere (e.g. in the main editor) since editing began.
+				const current = await this.app.vault.read(entry.file);
+				if (current !== original && !(await confirmModal(
+					this.app,
+					"Note changed elsewhere",
+					`"${entry.file.basename}" was modified outside the sidebar after you started editing. Overwrite it with your version?`,
+					"Overwrite"
+				))) {
+					editor?.focus();
+					return;
+				}
+				await this.app.vault.modify(entry.file, editor.getText());
+				if (this.activeEdit?.card === card) this.activeEdit = null;
+				editor.destroy();
+				editor = null;
+				// Redraw so the card's title/badges/grouping reflect the new frontmatter, then re-open it (in read mode).
+				await this.render({ keepExpanded: true });
+				new Notice(`Saved "${entry.file.basename}".`);
+			} catch (err) {
+				console.error("World Builder: save failed", err);
+				new Notice(`Couldn't save "${entry.file.basename}".`);
+			}
+		};
+
+
+		showViewActions();
+
+		// Switching edits from another card saved (and redrew) the sidebar: open this card's editor now.
+		if (this.pendingEditPath === entry.file.path) {
+			this.pendingEditPath = null;
+			void runExclusive(startEditing);
+		}
 
 		this.recordNav(tab, entry.file.path);
 	}
@@ -1479,6 +1687,12 @@ class WorldBuilderView extends ItemView {
 
 		let closedCard = false;
 		pane.body.querySelectorAll<HTMLElement>(".wb-card.wb-card-expanded").forEach((card) => {
+			// Leave a card with unsaved inline edits open rather than dropping the edits.
+			if (this.activeEdit?.card === card) {
+				if (this.activeEdit.isDirty()) return;
+				this.activeEdit.abandon();
+				this.activeEdit = null;
+			}
 			card.querySelector(":scope > .wb-card-expand")?.remove();
 			card.removeClass("wb-card-expanded");
 			card.setAttribute("aria-expanded", "false");
@@ -1895,7 +2109,277 @@ class WorldBuilderView extends ItemView {
 	}
 }
 
+// ─── Inline editors (sidebar Edit button) ────────────────────────────────────
+
+/** What the expanded card needs from whichever inline editor is open. */
+interface InlineEditor {
+	/** The full note text to write back (frontmatter + body). Returns the original text untouched if nothing changed. */
+	getText(): string;
+	isDirty(): boolean;
+	focus(): void;
+	/** Removes the editor from the DOM and releases anything it registered. */
+	destroy(): void;
+}
+interface InlineEditorKeys { save: () => void; cancel: () => void; }
+
+/** Splits a leading YAML frontmatter block into its delimiters and contents, so the two can be edited separately. */
+function splitFrontmatter(text: string): { open: string; yaml: string; close: string; body: string } | null {
+	const m = text.match(/^(---\r?\n)([\s\S]*?)(\r?\n---[ \t]*(?:\r?\n|$))/);
+	if (!m) return null;
+	return { open: m[1]!, yaml: m[2]!, close: m[3]!, body: text.slice(m[0].length) };
+}
+
+/** Plain auto-growing textarea (used for the whole note in raw mode, and for the Properties box in Live Preview mode). */
+function createAutoTextarea(parent: HTMLElement, cls: string, value: string, label: string, keys: InlineEditorKeys): HTMLTextAreaElement {
+	const ta = parent.createEl("textarea", { cls, attr: { spellcheck: "true", "aria-label": label } });
+	ta.value = value;
+	// Grow with the text (up to the CSS max-height, then it scrolls).
+	const autosize = () => {
+		ta.style.height = "auto";
+		ta.style.height = `${ta.scrollHeight + 2}px`;
+	};
+	ta.addEventListener("input", autosize);
+	ta.addEventListener("keydown", (e) => {
+		const mod = e.ctrlKey || e.metaKey;
+		if (mod && (e.key === "s" || e.key === "Enter")) {
+			e.preventDefault();
+			keys.save();
+		} else if (e.key === "Escape") {
+			e.preventDefault();
+			keys.cancel();
+		} else if (e.key === "Tab" && !mod && !e.altKey) {
+			// Insert a tab instead of moving focus out of the editor.
+			e.preventDefault();
+			ta.setRangeText("\t", ta.selectionStart, ta.selectionEnd, "end");
+			autosize();
+		}
+	});
+	// Size once it's laid out (scrollHeight is 0 while detached).
+	requestAnimationFrame(autosize);
+	return ta;
+}
+
+/**
+ * RAW MARKDOWN EDITOR: a plain textarea holding the note's entire file, frontmatter included.
+ * Uses only standard DOM, so it can't be broken by Obsidian updates. It's the fallback whenever
+ * the Live Preview editor can't be created, and what the "Sidebar editor: Raw markdown" setting uses.
+ */
+function createRawEditor(anchor: HTMLElement, file: TFile, text: string, keys: InlineEditorKeys): InlineEditor {
+	const wrap = createDiv("wb-card-editor-wrap");
+	anchor.insertAdjacentElement("afterend", wrap);
+	const ta = createAutoTextarea(wrap, "wb-card-editor", text, `Edit ${file.basename}`, keys);
+	return {
+		getText: () => ta.value,
+		isDirty: () => ta.value !== text,
+		focus: () => {
+			ta.focus();
+			ta.setSelectionRange(0, 0);
+			ta.scrollTop = 0;
+		},
+		destroy: () => wrap.remove(),
+	};
+}
+
+/*
+ * ⚠ UNDOCUMENTED OBSIDIAN API ⚠  (see README.md › "Undocumented Obsidian API")
+ *
+ * Obsidian's plugin API has no supported way to put its Live Preview editor inside a custom view.
+ * The technique below, the same one the Kanban plugin uses for its card editor
+ * (github.com/mgmeyers/obsidian-kanban, src/main.ts getEditorClass() and
+ * src/components/Editor/MarkdownEditor.tsx), borrows the editor class from a throwaway markdown
+ * embed:
+ *   1. app.embedRegistry.embedByExtension.md(...) builds an embed (the kind used for ![[note]]).
+ *   2. Setting editable = true and calling showEditor() makes it create its editor (embed.editMode).
+ *   3. The prototype two levels up from editMode is Obsidian's internal (scrollable) markdown
+ *      editor class; we keep its constructor and unload the embed.
+ *   4. New instances of that class are then created in the sidebar with a small stand-in "owner"
+ *      object mimicking the bits of MarkdownView the editor asks for.
+ * Every internal name used: app.embedRegistry, embedByExtension.md, embed.editable,
+ * embed.showEditor(), embed.editMode, the editor's constructor(app, containerEl, owner), its
+ * set(text), .editor, .cm, updateBottomPadding(), and app.vault.config. If any of these change,
+ * resolveLivePreviewEditorClass() or createLivePreviewEditor() returns null and the sidebar falls
+ * back to createRawEditor() automatically.
+ */
+/** Text size of the sidebar's Live Preview editor relative to the main editor (0.75 = 25% smaller). */
+const LIVE_PREVIEW_TEXT_SCALE = 0.75;
+type LivePreviewEditorClass = new (app: App, containerEl: HTMLElement, owner: unknown) => any;
+/** undefined = not looked up yet; null = unavailable in this Obsidian version (use the raw editor). */
+let livePreviewEditorClass: LivePreviewEditorClass | null | undefined;
+
+function resolveLivePreviewEditorClass(app: App): LivePreviewEditorClass | null {
+	if (livePreviewEditorClass !== undefined) return livePreviewEditorClass;
+	livePreviewEditorClass = null;
+	try {
+		const embed = (app as any).embedRegistry?.embedByExtension?.md?.({ app, containerEl: createDiv(), state: {} }, null, "");
+		if (embed) {
+			embed.load();
+			embed.editable = true;
+			embed.showEditor();
+			const ctor = embed.editMode ? Object.getPrototypeOf(Object.getPrototypeOf(embed.editMode))?.constructor : null;
+			embed.unload();
+			if (typeof ctor === "function") livePreviewEditorClass = ctor as LivePreviewEditorClass;
+		}
+	} catch (err) {
+		console.warn("World Builder: Live Preview editor unavailable (Obsidian internals changed?); using the raw markdown editor.", err);
+	}
+	return livePreviewEditorClass;
+}
+
+/**
+ * LIVE PREVIEW EDITOR: Obsidian's own editor (formatting rendered as you type, [[link]] suggestions,
+ * editor hotkeys) for the note's body, plus a raw "Properties" box above it for the frontmatter
+ * YAML. It edits a copy of the text in memory: nothing is written to the file until Save.
+ * Returns null if the internal editor can't be created, so the caller can fall back.
+ */
+function createLivePreviewEditor(
+	app: App,
+	parent: Component,
+	anchor: HTMLElement,
+	file: TFile,
+	text: string,
+	keys: InlineEditorKeys
+): InlineEditor | null {
+	const Base = resolveLivePreviewEditorClass(app);
+	if (!Base) return null;
+
+	const wrap = createDiv("wb-card-editor-wrap wb-card-editor-live");
+	anchor.insertAdjacentElement("afterend", wrap);
+	const fm = splitFrontmatter(text);
+	let props: HTMLTextAreaElement | null = null;
+	if (fm) {
+		wrap.createDiv({ cls: "wb-card-editor-label", text: "Properties" });
+		props = createAutoTextarea(wrap, "wb-card-editor wb-card-editor-props", fm.yaml, `Properties of ${file.basename}`, keys);
+	}
+	const host = wrap.createDiv("wb-card-editor-body");
+	// Draw the editor's text 25% smaller than the main editor (the raw fallback keeps its own size).
+	// Everything in the editor, headings included, scales from --font-text-size.
+	const baseSize = parseFloat(getComputedStyle(host).getPropertyValue("--font-text-size")) || 16;
+	host.style.setProperty("--font-text-size", `${baseSize * LIVE_PREVIEW_TEXT_SCALE}px`);
+
+	let cmp: any = null;
+	// Stand-in for the MarkdownView the editor normally lives in (same shape Kanban uses).
+	const owner: any = {
+		app,
+		showSearch: () => {},
+		toggleMode: () => {},
+		onMarkdownScroll: () => {},
+		getMode: () => "source",
+		scroll: 0,
+		editMode: null,
+		get editor() { return cmp?.editor; },
+		get file() { return file; },
+		get path() { return file.path; },
+	};
+	// Hide line numbers and fold arrows in the narrow sidebar, whatever the vault's editor settings are.
+	const vaultProxy = new Proxy(app.vault, {
+		get(target, prop, receiver) {
+			if (prop === "config") {
+				return new Proxy((target as any).config ?? {}, {
+					get(cfg, key, r) {
+						if (key === "showLineNumber" || key === "foldHeading" || key === "foldIndent") return false;
+						return Reflect.get(cfg, key, r);
+					},
+				});
+			}
+			return Reflect.get(target, prop, receiver);
+		},
+	});
+	const appProxy = new Proxy(app, {
+		get(target, prop, receiver) {
+			return prop === "vault" ? vaultProxy : Reflect.get(target, prop, receiver);
+		},
+	});
+
+	const bodyText = fm ? fm.body : text;
+	let initialBody = bodyText;
+	try {
+		class SidebarMarkdownEditor extends Base {
+			// The stock editor pads the bottom so the last line can scroll to mid-screen; not wanted in a card.
+			updateBottomPadding() {}
+		}
+		cmp = new SidebarMarkdownEditor(appProxy as App, host, owner);
+		parent.addChild(cmp);
+		owner.editMode = cmp;
+		cmp.set(bodyText);
+		initialBody = getBodyValue(); // the editor may normalise line endings; compare against what it holds
+	} catch (err) {
+		console.warn("World Builder: couldn't create the Live Preview editor; using the raw markdown editor.", err);
+		try { if (cmp) parent.removeChild(cmp); } catch { /* ignore */ }
+		wrap.remove();
+		return null;
+	}
+
+	function getBodyValue(): string {
+		return cmp?.editor?.getValue?.() ?? cmp?.cm?.state?.doc?.toString?.() ?? bodyText;
+	}
+
+	// Save / Cancel keys while the editor has focus. A Scope takes priority over Obsidian's own
+	// hotkeys (e.g. Mod+Enter would otherwise "open link in new tab").
+	const scope = new Scope(app.scope);
+	scope.register(["Mod"], "s", () => { keys.save(); return false; });
+	scope.register(["Mod"], "Enter", () => { keys.save(); return false; });
+	scope.register([], "Escape", () => { keys.cancel(); return false; });
+	let scopePushed = false;
+	const popScope = () => {
+		if (scopePushed) app.keymap.popScope(scope);
+		scopePushed = false;
+	};
+	host.addEventListener("focusin", () => {
+		if (!scopePushed) { app.keymap.pushScope(scope); scopePushed = true; }
+		// Lets editor commands and hotkeys (bold, toggle checklist, ...) act on this editor.
+		(app.workspace as any).activeEditor = owner;
+	});
+	host.addEventListener("focusout", (e) => {
+		if (!host.contains(e.relatedTarget as Node | null)) popScope();
+	});
+
+	const bodyChanged = () => getBodyValue() !== initialBody;
+	const propsChanged = () => !!fm && !!props && props.value !== fm.yaml;
+	let destroyed = false;
+	return {
+		getText: () => {
+			if (!bodyChanged() && !propsChanged()) return text;
+			const newBody = bodyChanged() ? getBodyValue() : bodyText;
+			if (!fm || !props) return newBody;
+			// Emptying the Properties box removes the frontmatter block entirely.
+			if (!props.value.trim()) return newBody;
+			return fm.open + props.value + fm.close + newBody;
+		},
+		isDirty: () => bodyChanged() || propsChanged(),
+		focus: () => {
+			try { cmp?.editor?.focus?.(); } catch { /* ignore */ }
+			host.scrollTop = 0;
+		},
+		destroy: () => {
+			if (destroyed) return;
+			destroyed = true;
+			popScope();
+			if ((app.workspace as any).activeEditor === owner) (app.workspace as any).activeEditor = null;
+			try { parent.removeChild(cmp); } catch { /* ignore */ }
+			wrap.remove();
+		},
+	};
+}
+
 // ─── Modals ──────────────────────────────────────────────────────────────────
+
+/** Small yes/no dialog (used to guard unsaved inline edits). Resolves true only if the action button is clicked. */
+function confirmModal(app: App, title: string, message: string, actionLabel: string): Promise<boolean> {
+	return new Promise((resolve) => {
+		let result = false;
+		const modal = new Modal(app);
+		modal.titleEl.setText(title);
+		modal.contentEl.createEl("p", { text: message });
+		const buttons = modal.contentEl.createDiv("wb-confirm-buttons");
+		const cancelBtn = buttons.createEl("button", { text: "Cancel", cls: "wb-btn-secondary", attr: { type: "button" } });
+		cancelBtn.onclick = () => modal.close();
+		const okBtn = buttons.createEl("button", { text: actionLabel, cls: "wb-btn-primary", attr: { type: "button" } });
+		okBtn.onclick = () => { result = true; modal.close(); };
+		modal.onClose = () => resolve(result);
+		modal.open();
+		cancelBtn.focus();
+	});
+}
 
 class CharacterModal extends Modal {
 	plugin: WorldBuilderPlugin;
@@ -2351,6 +2835,23 @@ class WorldBuilderSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
+		new Setting(containerEl)
+			.setName("Sidebar editor")
+			.setDesc(
+				"What the Edit button on an expanded entry opens. Live Preview uses Obsidian's own editor " +
+				"(formatting shown as you type, [[link]] suggestions); Raw markdown is a plain text box. " +
+				"If Live Preview ever stops working after an Obsidian update, the plugin falls back to Raw markdown on its own."
+			)
+			.addDropdown((d) =>
+				d
+					.addOption("live", "Live Preview")
+					.addOption("raw", "Raw markdown")
+					.setValue(this.plugin.settings.inlineEditor)
+					.onChange(async (v) => {
+						this.plugin.settings.inlineEditor = v === "raw" ? "raw" : "live";
+						await this.plugin.saveSettings();
+					})
+			);
 	}
 }
 
@@ -2456,6 +2957,7 @@ export default class WorldBuilderPlugin extends Plugin {
 		this.settings.sectionOrder = data?.sectionOrder ?? {};
 		this.settings.bookmarks = data?.bookmarks ?? [];
 		this.settings.collapsedBookmarkGroups = data?.collapsedBookmarkGroups ?? [];
+		this.settings.inlineEditor = data?.inlineEditor === "raw" ? "raw" : "live";
 	}
 	async saveSettings() {
 		await this.saveData(this.settings);

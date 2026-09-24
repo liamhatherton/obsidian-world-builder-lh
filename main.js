@@ -32,7 +32,8 @@ var DEFAULT_SETTINGS = {
   collapsedSubsidiaries: [],
   sectionOrder: {},
   bookmarks: [],
-  collapsedBookmarkGroups: []
+  collapsedBookmarkGroups: [],
+  inlineEditor: "live"
 };
 var EMPLOYER_TYPES = [
   { key: "corporation", label: "Corporation" },
@@ -285,6 +286,13 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     this.groupCollapsers = /* @__PURE__ */ new WeakMap();
     /** Whether the click that started the current (possible) double-click landed on the tab that was already active. */
     this.tabClickWasOnActive = false;
+    /**
+     * The one card whose inline markdown editor is open (only one entry is edited at a time).
+     * finish() saves any changes and leaves edit mode, resolving false if that was cancelled.
+     */
+    this.activeEdit = null;
+    /** Note path whose editor should open as soon as its card is redrawn (after switching edits triggers a save + redraw). */
+    this.pendingEditPath = null;
     // Rebuilt on every render(); let switchTab() and the nav buttons operate without closures.
     this.tabBarEl = null;
     this.tabContents = {};
@@ -316,16 +324,31 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
   }
   async onClose() {
   }
-  async render() {
-    var _a, _b;
+  /**
+   * Redraws the whole sidebar. With keepExpanded, the cards that were expanded (per tab) are
+   * re-opened afterwards, e.g. after saving an inline edit, so the saved card stays open.
+   */
+  async render(opts = {}) {
+    var _a, _b, _c, _d;
     const { containerEl } = this;
     const scrollTop = (_b = (_a = containerEl.querySelector(".wb-scroll")) == null ? void 0 : _a.scrollTop) != null ? _b : 0;
+    const reopen = [];
+    if (opts.keepExpanded) {
+      for (const [tab, pane] of Object.entries(this.tabContents)) {
+        pane.body.querySelectorAll(".wb-card.wb-card-expanded").forEach((card) => {
+          const path = card.getAttribute("data-path");
+          if (path) reopen.push({ tab, path });
+        });
+      }
+    }
     const oldSearch = containerEl.querySelector(".wb-search-input");
     const searchHadFocus = !!oldSearch && containerEl.ownerDocument.activeElement === oldSearch;
     containerEl.empty();
     containerEl.addClass("wb-sidebar");
     this.entryByPath = /* @__PURE__ */ new Map();
     this.treeExpanders = /* @__PURE__ */ new Map();
+    (_c = this.activeEdit) == null ? void 0 : _c.abandon();
+    this.activeEdit = null;
     this.navButtons = [];
     this.bookmarkHeaderButtons = [];
     this.sectionConfigs = {};
@@ -464,12 +487,12 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       "Locations",
       () => new LocationModal(this.app, this.plugin, () => this.render()).open(),
       (fm) => {
-        var _a2, _b2, _c;
+        var _a2, _b2, _c2;
         return {
           title: (_a2 = fm.name) != null ? _a2 : "Unnamed",
           // Type already shows as the badge, so the sub-line is just the parent location.
           meta: ((_b2 = fm.parent) != null ? _b2 : "").trim(),
-          badge: (_c = fm.type) != null ? _c : ""
+          badge: (_c2 = fm.type) != null ? _c2 : ""
         };
       },
       {
@@ -496,11 +519,11 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       "Employers",
       () => new EmployerModal(this.app, this.plugin, () => this.render()).open(),
       (fm) => {
-        var _a2, _b2, _c;
+        var _a2, _b2, _c2;
         return {
           title: (_a2 = fm.name) != null ? _a2 : "Unnamed",
           meta: (_b2 = fm.goals) != null ? _b2 : "",
-          badge: (_c = fm.alignment) != null ? _c : ""
+          badge: (_c2 = fm.alignment) != null ? _c2 : ""
         };
       },
       { thumbs: true, expandable: true, typeGroups: true }
@@ -512,11 +535,11 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       "Lore Entries",
       () => new LoreModal(this.app, this.plugin, () => this.render()).open(),
       (fm) => {
-        var _a2, _b2, _c;
+        var _a2, _b2, _c2;
         return {
           title: (_a2 = fm.title) != null ? _a2 : "Untitled",
           meta: (_b2 = fm.category) != null ? _b2 : "",
-          badge: (_c = fm.category) != null ? _c : ""
+          badge: (_c2 = fm.category) != null ? _c2 : ""
         };
       },
       { expandable: true }
@@ -539,6 +562,19 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     );
     this.renderSectionHeader(bookmarksPane, "Bookmarks", null, true);
     this.renderBookmarks();
+    if (reopen.length) {
+      this.restoringNav = true;
+      try {
+        for (const { tab, path } of reopen) {
+          const card = (_d = contents[tab]) == null ? void 0 : _d.body.querySelector(`.wb-card[data-path="${CSS.escape(path)}"]`);
+          const entry = this.entryByPath.get(path);
+          if (card && entry && !card.classList.contains("wb-card-expanded")) this.toggleCardExpand(tab, card, entry);
+        }
+      } finally {
+        this.restoringNav = false;
+      }
+      this.refreshCurrentCardHighlight();
+    }
     scroll.scrollTop = scrollTop;
     for (const { id } of tabs) this.applySearch(id);
     updateShadow();
@@ -1153,13 +1189,24 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
   }
   /**
    * Expands a card in place to show the note's text (no images) instead of opening it in the
-   * editor, so writing in the main pane isn't interrupted. An Edit button in the expanded area
-   * still opens the note the normal way. Clicking the card again (or its chevron) collapses it.
+   * editor, so writing in the main pane isn't interrupted. Modify MD in the expanded area opens
+   * the note the normal way; Edit edits its markdown inline. Clicking the card again (or its chevron) collapses it.
    */
-  toggleCardExpand(tab, card, entry) {
-    var _a;
+  toggleCardExpand(tab, card, entry, force = false) {
+    var _a, _b;
     const wasExpanded = card.classList.contains("wb-card-expanded");
-    (_a = card.querySelector(":scope > .wb-card-expand")) == null ? void 0 : _a.remove();
+    const editingThis = ((_a = this.activeEdit) == null ? void 0 : _a.card) === card;
+    if (wasExpanded && !force && editingThis && this.activeEdit.isDirty()) {
+      void confirmModal(this.app, "Discard changes?", `Your edits to "${entry.file.basename}" haven't been saved.`, "Discard").then((ok) => {
+        if (ok) this.toggleCardExpand(tab, card, entry, true);
+      });
+      return;
+    }
+    if (editingThis) {
+      this.activeEdit.abandon();
+      this.activeEdit = null;
+    }
+    (_b = card.querySelector(":scope > .wb-card-expand")) == null ? void 0 : _b.remove();
     card.removeClass("wb-card-expanded");
     card.setAttribute("aria-expanded", "false");
     if (wasExpanded) {
@@ -1195,10 +1242,133 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     (0, import_obsidian.setIcon)(bookmarkBtn, "bookmark");
     this.syncBookmarkToggle(bookmarkBtn, this.plugin.settings.bookmarks.includes(entry.file.path));
     bookmarkBtn.onclick = () => this.toggleBookmark(entry.file.path);
-    const editBtn = footer.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
-    (0, import_obsidian.setIcon)(editBtn.createEl("span", { cls: "wb-btn-icon" }), "pencil");
-    editBtn.createEl("span", { text: "Edit" });
-    editBtn.onclick = () => this.app.workspace.getLeaf().openFile(entry.file);
+    const actions = footer.createDiv("wb-card-expand-actions");
+    const showViewActions = () => {
+      actions.empty();
+      const modifyBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
+      (0, import_obsidian.setIcon)(modifyBtn.createEl("span", { cls: "wb-btn-icon" }), "file-text");
+      modifyBtn.createEl("span", { text: "Modify MD" });
+      modifyBtn.onclick = () => this.app.workspace.getLeaf().openFile(entry.file);
+      const editBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
+      (0, import_obsidian.setIcon)(editBtn.createEl("span", { cls: "wb-btn-icon" }), "pencil");
+      editBtn.createEl("span", { text: "Edit" });
+      editBtn.onclick = () => void runExclusive(startEditing);
+    };
+    const showEditActions = () => {
+      actions.empty();
+      const cancelBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
+      (0, import_obsidian.setIcon)(cancelBtn.createEl("span", { cls: "wb-btn-icon" }), "x");
+      cancelBtn.createEl("span", { text: "Cancel" });
+      cancelBtn.onclick = () => void runExclusive(discard);
+      const saveBtn = actions.createEl("button", { cls: "wb-btn-primary", attr: { type: "button" } });
+      (0, import_obsidian.setIcon)(saveBtn.createEl("span", { cls: "wb-btn-icon" }), "check");
+      saveBtn.createEl("span", { text: "Save" });
+      saveBtn.onclick = () => void runExclusive(finishEditing);
+    };
+    let editor = null;
+    let original = "";
+    let busy = false;
+    const runExclusive = async (fn) => {
+      if (busy) return;
+      busy = true;
+      try {
+        await fn();
+      } finally {
+        busy = false;
+      }
+    };
+    const isDirty = () => !!editor && editor.isDirty();
+    const stopEditing = () => {
+      var _a2;
+      if (((_a2 = this.activeEdit) == null ? void 0 : _a2.card) === card) this.activeEdit = null;
+      editor == null ? void 0 : editor.destroy();
+      editor = null;
+      body.show();
+      expand.removeClass("is-editing");
+      showViewActions();
+    };
+    const startEditing = async () => {
+      var _a2;
+      const other = this.activeEdit;
+      if (other && other.card !== card) {
+        this.pendingEditPath = entry.file.path;
+        const ok = await other.finish();
+        if (!ok || !card.isConnected) {
+          if (!ok) this.pendingEditPath = null;
+          return;
+        }
+        this.pendingEditPath = null;
+      }
+      try {
+        original = await this.app.vault.read(entry.file);
+      } catch (err) {
+        new import_obsidian.Notice(`Couldn't read "${entry.file.basename}".`);
+        return;
+      }
+      if (!card.isConnected || !expand.isConnected || editor) return;
+      expand.addClass("is-editing");
+      showEditActions();
+      body.hide();
+      const keys = {
+        save: () => void runExclusive(finishEditing),
+        cancel: () => void runExclusive(discard)
+      };
+      editor = (_a2 = this.plugin.settings.inlineEditor === "live" ? createLivePreviewEditor(this.app, this, body, entry.file, original, keys) : null) != null ? _a2 : createRawEditor(body, entry.file, original, keys);
+      this.activeEdit = {
+        card,
+        isDirty,
+        finish: async () => {
+          await finishEditing();
+          return !editor || !card.isConnected;
+        },
+        abandon: () => {
+          editor == null ? void 0 : editor.destroy();
+          editor = null;
+        }
+      };
+      editor.focus();
+    };
+    const discard = async () => {
+      if (isDirty() && !await confirmModal(this.app, "Discard changes?", `Your edits to "${entry.file.basename}" haven't been saved.`, "Discard")) {
+        editor == null ? void 0 : editor.focus();
+        return;
+      }
+      stopEditing();
+    };
+    const finishEditing = async () => {
+      var _a2;
+      if (!editor) return;
+      if (!isDirty()) {
+        stopEditing();
+        return;
+      }
+      try {
+        const current = await this.app.vault.read(entry.file);
+        if (current !== original && !await confirmModal(
+          this.app,
+          "Note changed elsewhere",
+          `"${entry.file.basename}" was modified outside the sidebar after you started editing. Overwrite it with your version?`,
+          "Overwrite"
+        )) {
+          editor == null ? void 0 : editor.focus();
+          return;
+        }
+        await this.app.vault.modify(entry.file, editor.getText());
+        if (((_a2 = this.activeEdit) == null ? void 0 : _a2.card) === card) this.activeEdit = null;
+        editor.destroy();
+        editor = null;
+        await this.render({ keepExpanded: true });
+        new import_obsidian.Notice(`Saved "${entry.file.basename}".`);
+      } catch (err) {
+        console.error("World Builder: save failed", err);
+        new import_obsidian.Notice(`Couldn't save "${entry.file.basename}".`);
+      }
+    };
+    showViewActions();
+    if (this.pendingEditPath === entry.file.path) {
+      this.pendingEditPath = null;
+      void runExclusive(startEditing);
+    }
     this.recordNav(tab, entry.file.path);
   }
   /**
@@ -1215,8 +1385,13 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     if (!pane) return;
     let closedCard = false;
     pane.body.querySelectorAll(".wb-card.wb-card-expanded").forEach((card) => {
-      var _a2;
-      (_a2 = card.querySelector(":scope > .wb-card-expand")) == null ? void 0 : _a2.remove();
+      var _a2, _b;
+      if (((_a2 = this.activeEdit) == null ? void 0 : _a2.card) === card) {
+        if (this.activeEdit.isDirty()) return;
+        this.activeEdit.abandon();
+        this.activeEdit = null;
+      }
+      (_b = card.querySelector(":scope > .wb-card-expand")) == null ? void 0 : _b.remove();
       card.removeClass("wb-card-expanded");
       card.setAttribute("aria-expanded", "false");
       closedCard = true;
@@ -1589,6 +1764,233 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     });
   }
 };
+function splitFrontmatter(text) {
+  const m = text.match(/^(---\r?\n)([\s\S]*?)(\r?\n---[ \t]*(?:\r?\n|$))/);
+  if (!m) return null;
+  return { open: m[1], yaml: m[2], close: m[3], body: text.slice(m[0].length) };
+}
+function createAutoTextarea(parent, cls, value, label, keys) {
+  const ta = parent.createEl("textarea", { cls, attr: { spellcheck: "true", "aria-label": label } });
+  ta.value = value;
+  const autosize = () => {
+    ta.style.height = "auto";
+    ta.style.height = `${ta.scrollHeight + 2}px`;
+  };
+  ta.addEventListener("input", autosize);
+  ta.addEventListener("keydown", (e) => {
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && (e.key === "s" || e.key === "Enter")) {
+      e.preventDefault();
+      keys.save();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      keys.cancel();
+    } else if (e.key === "Tab" && !mod && !e.altKey) {
+      e.preventDefault();
+      ta.setRangeText("	", ta.selectionStart, ta.selectionEnd, "end");
+      autosize();
+    }
+  });
+  requestAnimationFrame(autosize);
+  return ta;
+}
+function createRawEditor(anchor, file, text, keys) {
+  const wrap = createDiv("wb-card-editor-wrap");
+  anchor.insertAdjacentElement("afterend", wrap);
+  const ta = createAutoTextarea(wrap, "wb-card-editor", text, `Edit ${file.basename}`, keys);
+  return {
+    getText: () => ta.value,
+    isDirty: () => ta.value !== text,
+    focus: () => {
+      ta.focus();
+      ta.setSelectionRange(0, 0);
+      ta.scrollTop = 0;
+    },
+    destroy: () => wrap.remove()
+  };
+}
+var LIVE_PREVIEW_TEXT_SCALE = 0.75;
+var livePreviewEditorClass;
+function resolveLivePreviewEditorClass(app) {
+  var _a, _b, _c, _d;
+  if (livePreviewEditorClass !== void 0) return livePreviewEditorClass;
+  livePreviewEditorClass = null;
+  try {
+    const embed = (_c = (_b = (_a = app.embedRegistry) == null ? void 0 : _a.embedByExtension) == null ? void 0 : _b.md) == null ? void 0 : _c.call(_b, { app, containerEl: createDiv(), state: {} }, null, "");
+    if (embed) {
+      embed.load();
+      embed.editable = true;
+      embed.showEditor();
+      const ctor = embed.editMode ? (_d = Object.getPrototypeOf(Object.getPrototypeOf(embed.editMode))) == null ? void 0 : _d.constructor : null;
+      embed.unload();
+      if (typeof ctor === "function") livePreviewEditorClass = ctor;
+    }
+  } catch (err) {
+    console.warn("World Builder: Live Preview editor unavailable (Obsidian internals changed?); using the raw markdown editor.", err);
+  }
+  return livePreviewEditorClass;
+}
+function createLivePreviewEditor(app, parent, anchor, file, text, keys) {
+  const Base = resolveLivePreviewEditorClass(app);
+  if (!Base) return null;
+  const wrap = createDiv("wb-card-editor-wrap wb-card-editor-live");
+  anchor.insertAdjacentElement("afterend", wrap);
+  const fm = splitFrontmatter(text);
+  let props = null;
+  if (fm) {
+    wrap.createDiv({ cls: "wb-card-editor-label", text: "Properties" });
+    props = createAutoTextarea(wrap, "wb-card-editor wb-card-editor-props", fm.yaml, `Properties of ${file.basename}`, keys);
+  }
+  const host = wrap.createDiv("wb-card-editor-body");
+  const baseSize = parseFloat(getComputedStyle(host).getPropertyValue("--font-text-size")) || 16;
+  host.style.setProperty("--font-text-size", `${baseSize * LIVE_PREVIEW_TEXT_SCALE}px`);
+  let cmp = null;
+  const owner = {
+    app,
+    showSearch: () => {
+    },
+    toggleMode: () => {
+    },
+    onMarkdownScroll: () => {
+    },
+    getMode: () => "source",
+    scroll: 0,
+    editMode: null,
+    get editor() {
+      return cmp == null ? void 0 : cmp.editor;
+    },
+    get file() {
+      return file;
+    },
+    get path() {
+      return file.path;
+    }
+  };
+  const vaultProxy = new Proxy(app.vault, {
+    get(target, prop, receiver) {
+      var _a;
+      if (prop === "config") {
+        return new Proxy((_a = target.config) != null ? _a : {}, {
+          get(cfg, key, r) {
+            if (key === "showLineNumber" || key === "foldHeading" || key === "foldIndent") return false;
+            return Reflect.get(cfg, key, r);
+          }
+        });
+      }
+      return Reflect.get(target, prop, receiver);
+    }
+  });
+  const appProxy = new Proxy(app, {
+    get(target, prop, receiver) {
+      return prop === "vault" ? vaultProxy : Reflect.get(target, prop, receiver);
+    }
+  });
+  const bodyText = fm ? fm.body : text;
+  let initialBody = bodyText;
+  try {
+    class SidebarMarkdownEditor extends Base {
+      // The stock editor pads the bottom so the last line can scroll to mid-screen; not wanted in a card.
+      updateBottomPadding() {
+      }
+    }
+    cmp = new SidebarMarkdownEditor(appProxy, host, owner);
+    parent.addChild(cmp);
+    owner.editMode = cmp;
+    cmp.set(bodyText);
+    initialBody = getBodyValue();
+  } catch (err) {
+    console.warn("World Builder: couldn't create the Live Preview editor; using the raw markdown editor.", err);
+    try {
+      if (cmp) parent.removeChild(cmp);
+    } catch (e) {
+    }
+    wrap.remove();
+    return null;
+  }
+  function getBodyValue() {
+    var _a, _b, _c, _d, _e, _f, _g, _h;
+    return (_h = (_g = (_b = (_a = cmp == null ? void 0 : cmp.editor) == null ? void 0 : _a.getValue) == null ? void 0 : _b.call(_a)) != null ? _g : (_f = (_e = (_d = (_c = cmp == null ? void 0 : cmp.cm) == null ? void 0 : _c.state) == null ? void 0 : _d.doc) == null ? void 0 : _e.toString) == null ? void 0 : _f.call(_e)) != null ? _h : bodyText;
+  }
+  const scope = new import_obsidian.Scope(app.scope);
+  scope.register(["Mod"], "s", () => {
+    keys.save();
+    return false;
+  });
+  scope.register(["Mod"], "Enter", () => {
+    keys.save();
+    return false;
+  });
+  scope.register([], "Escape", () => {
+    keys.cancel();
+    return false;
+  });
+  let scopePushed = false;
+  const popScope = () => {
+    if (scopePushed) app.keymap.popScope(scope);
+    scopePushed = false;
+  };
+  host.addEventListener("focusin", () => {
+    if (!scopePushed) {
+      app.keymap.pushScope(scope);
+      scopePushed = true;
+    }
+    app.workspace.activeEditor = owner;
+  });
+  host.addEventListener("focusout", (e) => {
+    if (!host.contains(e.relatedTarget)) popScope();
+  });
+  const bodyChanged = () => getBodyValue() !== initialBody;
+  const propsChanged = () => !!fm && !!props && props.value !== fm.yaml;
+  let destroyed = false;
+  return {
+    getText: () => {
+      if (!bodyChanged() && !propsChanged()) return text;
+      const newBody = bodyChanged() ? getBodyValue() : bodyText;
+      if (!fm || !props) return newBody;
+      if (!props.value.trim()) return newBody;
+      return fm.open + props.value + fm.close + newBody;
+    },
+    isDirty: () => bodyChanged() || propsChanged(),
+    focus: () => {
+      var _a, _b;
+      try {
+        (_b = (_a = cmp == null ? void 0 : cmp.editor) == null ? void 0 : _a.focus) == null ? void 0 : _b.call(_a);
+      } catch (e) {
+      }
+      host.scrollTop = 0;
+    },
+    destroy: () => {
+      if (destroyed) return;
+      destroyed = true;
+      popScope();
+      if (app.workspace.activeEditor === owner) app.workspace.activeEditor = null;
+      try {
+        parent.removeChild(cmp);
+      } catch (e) {
+      }
+      wrap.remove();
+    }
+  };
+}
+function confirmModal(app, title, message, actionLabel) {
+  return new Promise((resolve) => {
+    let result = false;
+    const modal = new import_obsidian.Modal(app);
+    modal.titleEl.setText(title);
+    modal.contentEl.createEl("p", { text: message });
+    const buttons = modal.contentEl.createDiv("wb-confirm-buttons");
+    const cancelBtn = buttons.createEl("button", { text: "Cancel", cls: "wb-btn-secondary", attr: { type: "button" } });
+    cancelBtn.onclick = () => modal.close();
+    const okBtn = buttons.createEl("button", { text: actionLabel, cls: "wb-btn-primary", attr: { type: "button" } });
+    okBtn.onclick = () => {
+      result = true;
+      modal.close();
+    };
+    modal.onClose = () => resolve(result);
+    modal.open();
+    cancelBtn.focus();
+  });
+}
 var CharacterModal = class extends import_obsidian.Modal {
   constructor(app, plugin, onDone) {
     super(app);
@@ -2026,6 +2428,14 @@ var WorldBuilderSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
+    new import_obsidian.Setting(containerEl).setName("Sidebar editor").setDesc(
+      "What the Edit button on an expanded entry opens. Live Preview uses Obsidian's own editor (formatting shown as you type, [[link]] suggestions); Raw markdown is a plain text box. If Live Preview ever stops working after an Obsidian update, the plugin falls back to Raw markdown on its own."
+    ).addDropdown(
+      (d) => d.addOption("live", "Live Preview").addOption("raw", "Raw markdown").setValue(this.plugin.settings.inlineEditor).onChange(async (v) => {
+        this.plugin.settings.inlineEditor = v === "raw" ? "raw" : "live";
+        await this.plugin.saveSettings();
+      })
+    );
   }
 };
 var WorldBuilderPlugin = class extends import_obsidian.Plugin {
@@ -2131,6 +2541,7 @@ var WorldBuilderPlugin = class extends import_obsidian.Plugin {
     this.settings.sectionOrder = (_f = data == null ? void 0 : data.sectionOrder) != null ? _f : {};
     this.settings.bookmarks = (_g = data == null ? void 0 : data.bookmarks) != null ? _g : [];
     this.settings.collapsedBookmarkGroups = (_h = data == null ? void 0 : data.collapsedBookmarkGroups) != null ? _h : [];
+    this.settings.inlineEditor = (data == null ? void 0 : data.inlineEditor) === "raw" ? "raw" : "live";
   }
   async saveSettings() {
     await this.saveData(this.settings);
