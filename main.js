@@ -23,6 +23,15 @@ __export(main_exports, {
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
+function getMarkdownFilesIn(app, folderPath) {
+  const folder = app.vault.getAbstractFileByPath((0, import_obsidian.normalizePath)(folderPath));
+  if (!(folder instanceof import_obsidian.TFolder)) return [];
+  const out = [];
+  import_obsidian.Vault.recurseChildren(folder, (f) => {
+    if (f instanceof import_obsidian.TFile && f.extension === "md") out.push(f);
+  });
+  return out;
+}
 var DEFAULT_SETTINGS = {
   worldFolder: "World",
   characterOrder: {},
@@ -707,9 +716,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     const container = pane.body;
     this.sectionConfigs[tab] = { getCard, thumbs: !!opts.thumbs, stackBadge: !!opts.stackBadge };
     this.renderSectionHeader(pane, label, onCreate, (_a = opts.reload) != null ? _a : true);
-    const files = this.app.vault.getMarkdownFiles().filter(
-      (f) => f.path.startsWith(folderPath + "/")
-    );
+    const files = getMarkdownFilesIn(this.app, folderPath);
     if (files.length === 0) {
       container.createDiv("wb-list").createDiv({ cls: "wb-empty", text: `No ${label.toLowerCase()} yet.` });
       return;
@@ -792,9 +799,8 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       bucket.items.push(entry);
     }
     const groupLogos = /* @__PURE__ */ new Map();
-    const groupFolder = `${this.plugin.settings.worldFolder}/Groups/`;
-    for (const file of this.app.vault.getMarkdownFiles()) {
-      if (!file.path.startsWith(groupFolder)) continue;
+    const groupFolder = `${this.plugin.settings.worldFolder}/Groups`;
+    for (const file of getMarkdownFilesIn(this.app, groupFolder)) {
       const content = await this.app.vault.cachedRead(file);
       const src = this.findFirstImageSrc(content, file);
       if (!src) continue;
@@ -2213,9 +2219,9 @@ var GroupModal = class extends import_obsidian.Modal {
       d.setValue(this.data.type);
       d.onChange((v) => this.data.type = v);
     });
-    const folder = `${this.plugin.settings.worldFolder}/Groups/`;
+    const folder = `${this.plugin.settings.worldFolder}/Groups`;
     const existing = Array.from(new Set(
-      this.app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(folder)).map((f) => {
+      getMarkdownFilesIn(this.app, folder).map((f) => {
         var _a, _b;
         const name = (_b = (_a = this.app.metadataCache.getFileCache(f)) == null ? void 0 : _a.frontmatter) == null ? void 0 : _b.name;
         return typeof name === "string" && name.trim() ? name.trim() : f.basename;

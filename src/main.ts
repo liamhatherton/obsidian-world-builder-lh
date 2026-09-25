@@ -11,9 +11,26 @@ import {
 	Setting,
 	setIcon,
 	TFile,
+	TFolder,
+	Vault,
+	normalizePath,
 	WorkspaceLeaf,
 } from "obsidian";
 import type { SettingDefinitionItem } from "obsidian";
+
+/**
+ * Markdown files inside `folderPath` (recursively), found by walking that folder only,
+ * so the plugin never has to list every file in the vault.
+ */
+function getMarkdownFilesIn(app: App, folderPath: string): TFile[] {
+	const folder = app.vault.getAbstractFileByPath(normalizePath(folderPath));
+	if (!(folder instanceof TFolder)) return [];
+	const out: TFile[] = [];
+	Vault.recurseChildren(folder, (f) => {
+		if (f instanceof TFile && f.extension === "md") out.push(f);
+	});
+	return out;
+}
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
@@ -891,9 +908,7 @@ class UniverseBuilderView extends ItemView {
 		this.sectionConfigs[tab] = { getCard, thumbs: !!opts.thumbs, stackBadge: !!opts.stackBadge };
 		this.renderSectionHeader(pane, label, onCreate, opts.reload ?? true);
 
-		const files = this.app.vault.getMarkdownFiles().filter((f) =>
-			f.path.startsWith(folderPath + "/")
-		);
+		const files = getMarkdownFilesIn(this.app, folderPath);
 
 		if (files.length === 0) {
 			container.createDiv("wb-list").createDiv({ cls: "wb-empty", text: `No ${label.toLowerCase()} yet.` });
@@ -968,9 +983,8 @@ class UniverseBuilderView extends ItemView {
 		// Each group's logo: the first image in its note under <World>/Groups, matched by
 		// the note's `name` property or its file name (case-insensitive).
 		const groupLogos = new Map<string, string>();
-		const groupFolder = `${this.plugin.settings.worldFolder}/Groups/`;
-		for (const file of this.app.vault.getMarkdownFiles()) {
-			if (!file.path.startsWith(groupFolder)) continue;
+		const groupFolder = `${this.plugin.settings.worldFolder}/Groups`;
+		for (const file of getMarkdownFilesIn(this.app, groupFolder)) {
 			const content = await this.app.vault.cachedRead(file);
 			const src = this.findFirstImageSrc(content, file);
 			if (!src) continue;
@@ -2602,10 +2616,9 @@ class GroupModal extends Modal {
 			d.onChange((v) => (this.data.type = v));
 		});
 		// Existing groups (by their `name` property, else the file name), alphabetically.
-		const folder = `${this.plugin.settings.worldFolder}/Groups/`;
+		const folder = `${this.plugin.settings.worldFolder}/Groups`;
 		const existing = Array.from(new Set(
-			this.app.vault.getMarkdownFiles()
-				.filter((f) => f.path.startsWith(folder))
+			getMarkdownFilesIn(this.app, folder)
 				.map((f) => {
 					const name = this.app.metadataCache.getFileCache(f)?.frontmatter?.name;
 					return (typeof name === "string" && name.trim()) ? name.trim() : f.basename;
