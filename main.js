@@ -1307,7 +1307,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       }
       try {
         original = await this.app.vault.read(entry.file);
-      } catch (err) {
+      } catch (e) {
         new import_obsidian.Notice(`Couldn't read "${entry.file.basename}".`);
         return;
       }
@@ -1798,7 +1798,7 @@ function createAutoTextarea(parent, cls, value, label, keys) {
       autosize();
     }
   });
-  requestAnimationFrame(autosize);
+  window.requestAnimationFrame(autosize);
   return ta;
 }
 function createRawEditor(anchor, file, text, keys) {
@@ -2031,9 +2031,9 @@ var CharacterModal = class extends import_obsidian.Modal {
       t.setPlaceholder("Character name").onChange((v) => this.data.name = v);
     });
     new import_obsidian.Setting(contentEl).setName("Role").addDropdown((d) => {
-      ["protagonist", "antagonist", "supporting", "minor"].forEach(
-        (o) => d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
-      );
+      ["protagonist", "antagonist", "supporting", "minor"].forEach((o) => {
+        d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1));
+      });
       d.setValue(this.data.role);
       d.onChange((v) => this.data.role = v);
     });
@@ -2138,9 +2138,9 @@ var LocationModal = class extends import_obsidian.Modal {
       t.setPlaceholder("Location name").onChange((v) => this.data.name = v);
     });
     new import_obsidian.Setting(contentEl).setName("Type").addDropdown((d) => {
-      ["planet", "dwarf planet", "moon", "station", "asteroid", "belt", "ship", "city", "region", "building", "landmark", "other"].forEach(
-        (o) => d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
-      );
+      ["planet", "dwarf planet", "moon", "station", "asteroid", "belt", "ship", "city", "region", "building", "landmark", "other"].forEach((o) => {
+        d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1));
+      });
       d.setValue(this.data.type);
       d.onChange((v) => this.data.type = v);
     });
@@ -2224,7 +2224,9 @@ var GroupModal = class extends import_obsidian.Modal {
       t.setPlaceholder("Group name").onChange((v) => this.data.name = v);
     });
     new import_obsidian.Setting(contentEl).setName("Type").addDropdown((d) => {
-      GROUP_TYPES.forEach(({ key, label }) => d.addOption(key, label));
+      GROUP_TYPES.forEach(({ key, label }) => {
+        d.addOption(key, label);
+      });
       d.setValue(this.data.type);
       d.onChange((v) => this.data.type = v);
     });
@@ -2238,14 +2240,16 @@ var GroupModal = class extends import_obsidian.Modal {
     )).sort((a, b) => a.localeCompare(b));
     new import_obsidian.Setting(contentEl).setName("Subsidiary of").setDesc("Nests this group under its parent's Subsidiaries label instead of its Type section.").addDropdown((d) => {
       d.addOption("", "None");
-      existing.forEach((n) => d.addOption(n, n));
+      existing.forEach((n) => {
+        d.addOption(n, n);
+      });
       d.setValue(this.data.subsidiaryOf);
       d.onChange((v) => this.data.subsidiaryOf = v);
     });
     new import_obsidian.Setting(contentEl).setName("Alignment").addDropdown((d) => {
-      ["lawful", "neutral", "chaotic"].forEach(
-        (o) => d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
-      );
+      ["lawful", "neutral", "chaotic"].forEach((o) => {
+        d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1));
+      });
       d.setValue(this.data.alignment);
       d.onChange((v) => this.data.alignment = v);
     });
@@ -2320,9 +2324,9 @@ var LoreModal = class extends import_obsidian.Modal {
       t.setPlaceholder("Entry title").onChange((v) => this.data.title = v);
     });
     new import_obsidian.Setting(contentEl).setName("Category").addDropdown((d) => {
-      ["history", "tech", "religion", "culture", "other"].forEach(
-        (o) => d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
-      );
+      ["history", "tech", "religion", "culture", "other"].forEach((o) => {
+        d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1));
+      });
       d.setValue(this.data.category);
       d.onChange((v) => this.data.category = v);
     });
@@ -2490,7 +2494,7 @@ var UniverseBuilderPlugin = class extends import_obsidian.Plugin {
     this.addRibbonIcon("orbit", "Universe Builder", () => void this.activateSidebar());
     this.addCommand({
       id: "open-sidebar",
-      name: "Open Universe Builder sidebar",
+      name: "Open sidebar",
       callback: () => void this.activateSidebar()
     });
     this.addCommand({

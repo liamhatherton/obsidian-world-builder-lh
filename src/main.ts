@@ -876,7 +876,7 @@ class UniverseBuilderView extends ItemView {
 					if (IMG_EXT.test(target.split(/[?#]/)[0])) return target;
 					continue;
 				}
-				try { target = decodeURIComponent(target); } catch (e) { /* keep as-is */ }
+				try { target = decodeURIComponent(target); } catch { /* keep as-is */ }
 				target = target.split("#")[0];
 			}
 			if (!IMG_EXT.test(target)) continue;
@@ -1615,7 +1615,7 @@ class UniverseBuilderView extends ItemView {
 			}
 			try {
 				original = await this.app.vault.read(entry.file);
-			} catch (err) {
+			} catch {
 				new Notice(`Couldn't read "${entry.file.basename}".`);
 				return;
 			}
@@ -2179,7 +2179,7 @@ function createAutoTextarea(parent: HTMLElement, cls: string, value: string, lab
 		}
 	});
 	// Size once it's laid out (scrollHeight is 0 while detached).
-	requestAnimationFrame(autosize);
+	window.requestAnimationFrame(autosize);
 	return ta;
 }
 
@@ -2455,9 +2455,9 @@ class CharacterModal extends Modal {
 			t.setPlaceholder("Character name").onChange((v) => (this.data.name = v));
 		});
 		new Setting(contentEl).setName("Role").addDropdown((d) => {
-			["protagonist", "antagonist", "supporting", "minor"].forEach((o) =>
-				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
-			);
+			["protagonist", "antagonist", "supporting", "minor"].forEach((o) => {
+				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1));
+			});
 			d.setValue(this.data.role);
 			d.onChange((v) => (this.data.role = v));
 		});
@@ -2564,9 +2564,9 @@ class LocationModal extends Modal {
 			t.setPlaceholder("Location name").onChange((v) => (this.data.name = v));
 		});
 		new Setting(contentEl).setName("Type").addDropdown((d) => {
-			["planet", "dwarf planet", "moon", "station", "asteroid", "belt", "ship", "city", "region", "building", "landmark", "other"].forEach((o) =>
-				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
-			);
+			["planet", "dwarf planet", "moon", "station", "asteroid", "belt", "ship", "city", "region", "building", "landmark", "other"].forEach((o) => {
+				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1));
+			});
 			d.setValue(this.data.type);
 			d.onChange((v) => (this.data.type = v));
 		});
@@ -2647,7 +2647,7 @@ class GroupModal extends Modal {
 			t.setPlaceholder("Group name").onChange((v) => (this.data.name = v));
 		});
 		new Setting(contentEl).setName("Type").addDropdown((d) => {
-			GROUP_TYPES.forEach(({ key, label }) => d.addOption(key, label));
+			GROUP_TYPES.forEach(({ key, label }) => { d.addOption(key, label); });
 			d.setValue(this.data.type);
 			d.onChange((v) => (this.data.type = v));
 		});
@@ -2665,14 +2665,14 @@ class GroupModal extends Modal {
 			.setDesc("Nests this group under its parent's Subsidiaries label instead of its Type section.")
 			.addDropdown((d) => {
 				d.addOption("", "None");
-				existing.forEach((n) => d.addOption(n, n));
+				existing.forEach((n) => { d.addOption(n, n); });
 				d.setValue(this.data.subsidiaryOf);
 				d.onChange((v) => (this.data.subsidiaryOf = v));
 			});
 		new Setting(contentEl).setName("Alignment").addDropdown((d) => {
-			["lawful", "neutral", "chaotic"].forEach((o) =>
-				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
-			);
+			["lawful", "neutral", "chaotic"].forEach((o) => {
+				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1));
+			});
 			d.setValue(this.data.alignment);
 			d.onChange((v) => (this.data.alignment = v));
 		});
@@ -2750,9 +2750,9 @@ class LoreModal extends Modal {
 			t.setPlaceholder("Entry title").onChange((v) => (this.data.title = v));
 		});
 		new Setting(contentEl).setName("Category").addDropdown((d) => {
-			["history", "tech", "religion", "culture", "other"].forEach((o) =>
-				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1))
-			);
+			["history", "tech", "religion", "culture", "other"].forEach((o) => {
+				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1));
+			});
 			d.setValue(this.data.category);
 			d.onChange((v) => (this.data.category = v));
 		});
@@ -2939,7 +2939,7 @@ export default class UniverseBuilderPlugin extends Plugin {
 
 		this.addCommand({
 			id: "open-sidebar",
-			name: "Open Universe Builder sidebar",
+			name: "Open sidebar",
 			callback: () => void this.activateSidebar(),
 		});
 		this.addCommand({
