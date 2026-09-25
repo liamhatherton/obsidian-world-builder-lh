@@ -2084,10 +2084,9 @@ var CharacterModal = class extends import_obsidian.Modal {
       ["Internal Conflicts", ""],
       ["External Conflicts", ""]
     ];
-    const headingColor = "#fac08f";
     const sectionLines = [];
     for (const [heading, text] of sections) {
-      sectionLines.push(`## <font color="${headingColor}">${heading}</font>`);
+      sectionLines.push(`## ${heading}`);
       if (text) sectionLines.push(text);
       sectionLines.push("");
     }
