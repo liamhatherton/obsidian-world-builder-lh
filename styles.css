@@ -480,11 +480,13 @@
 .wb-card-editor-body .cm-editor,
 .wb-card-editor-body .cm-scroller { height: auto; min-height: 8em; }
 .wb-card-editor-body .cm-scroller { padding: 6px 8px; overflow: visible; }
-.wb-card-editor-body .cm-sizer {
-	max-width: none !important;
-	margin: 0 !important;
-	padding: 0 !important;
-	min-height: 0 !important;
+/* Doubled classes raise specificity (0,6,0) above Obsidian's readable-line-width / pane sizer rules
+   (e.g. .markdown-source-view.mod-cm6.is-readable-line-width .cm-sizer) without needing !important. */
+.wb-card-editor-body.wb-card-editor-body .markdown-source-view .cm-scroller .cm-sizer.cm-sizer {
+	max-width: none;
+	margin: 0;
+	padding: 0;
+	min-height: 0;
 }
 .wb-card-editor-body .cm-content { padding: 0; }
 .wb-card-editor-body .cm-editor.cm-focused { outline: none; }
@@ -588,9 +590,9 @@
 .wb-search-clear svg { width: 14px; height: 14px; }
 
 /* Search filtering */
-.wb-sidebar .wb-filtered-out { display: none !important; }
+.wb-sidebar .wb-filtered-out { display: none; }
 /* While a search is active, sections that still have matches are shown open (saved collapsed state is untouched). */
-.wb-tab-body.is-searching .wb-list.is-collapsed { display: flex; }
+.wb-tab-body.is-searching .wb-list.is-collapsed:not(.wb-filtered-out) { display: flex; }
 .wb-tab-body.is-searching .wb-group-header { cursor: default; }
 .wb-tab-body.is-searching .wb-group-header:hover .wb-group-title { color: inherit; }
 .wb-tab-body.is-searching .wb-group-header.is-collapsed .wb-group-chevron { transform: none; }
