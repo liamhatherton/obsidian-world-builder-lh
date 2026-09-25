@@ -917,7 +917,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       };
     }
     if (onCreate) {
-      const btn = actions.createEl("button", { text: "+ New", cls: "wb-btn-primary" });
+      const btn = actions.createEl("button", { text: "+ New", cls: "wb-btn-secondary" });
       btn.onclick = onCreate;
     }
   }
