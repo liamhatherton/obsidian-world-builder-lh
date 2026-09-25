@@ -17,6 +17,8 @@ A fiction world-building toolkit for Obsidian: characters, locations, groups, lo
 
 ## Settings
 
+Requires Obsidian 1.13.0 or later. Settings are declared with Obsidian's declarative settings API, so both appear in the Settings search box.
+
 - **World folder** — where all world-building notes are stored (default: `World`)
 - **Sidebar editor** — what the Edit button on an expanded entry opens: **Live Preview** (Obsidian's own editor, the default) or **Raw markdown** (a plain text box holding the whole file, frontmatter included). See [Undocumented Obsidian API](#undocumented-obsidian-api)
 
@@ -89,7 +91,7 @@ This is the same technique the [Kanban plugin](https://github.com/mgmeyers/obsid
 3. **Remove it from the code entirely.** To revert to the raw-markdown editor permanently:
    - In `startEditing()` (inside `toggleCardExpand()`), replace the `editor = (... createLivePreviewEditor(...) ...) ?? createRawEditor(...)` assignment with `editor = createRawEditor(body, entry.file, original, keys);`.
    - Delete the `⚠ UNDOCUMENTED OBSIDIAN API ⚠` block: `LivePreviewEditorClass`, `livePreviewEditorClass`, `resolveLivePreviewEditorClass()` and `createLivePreviewEditor()`. Keep `splitFrontmatter()` only if something else still uses it.
-   - Optionally remove the `inlineEditor` setting (its field in `WorldBuilderSettings`, its default in `DEFAULT_SETTINGS`, the line in `loadSettings()`, and the "Sidebar editor" dropdown in `WorldBuilderSettingTab`) and the `.wb-card-editor-body` / `.wb-card-editor-props` / `.wb-card-editor-label` rules in `styles.css`.
+   - Optionally remove the `inlineEditor` setting (its field in `WorldBuilderSettings`, its default in `DEFAULT_SETTINGS`, the line in `loadSettings()`, and the "Sidebar editor" entry in `WorldBuilderSettingTab.getSettingDefinitions()` / `setControlValue()`) and the `.wb-card-editor-body` / `.wb-card-editor-props` / `.wb-card-editor-label` rules in `styles.css`.
    - Remove the `Scope` and `Component` imports if nothing else uses them.
 
 ### The raw-markdown alternative

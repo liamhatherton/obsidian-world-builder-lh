@@ -13,6 +13,7 @@ import {
 	TFile,
 	WorkspaceLeaf,
 } from "obsidian";
+import type { SettingDefinitionItem } from "obsidian";
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
@@ -2819,39 +2820,60 @@ class WorldBuilderSettingTab extends PluginSettingTab {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
-	display() {
-		const { containerEl } = this;
-		containerEl.empty();
-		containerEl.createEl("h2", { text: "World Builder Settings" });
-		new Setting(containerEl)
-			.setName("World Folder")
-			.setDesc("Root folder for all world-building notes.")
-			.addText((t) =>
-				t
-					.setPlaceholder("World")
-					.setValue(this.plugin.settings.worldFolder)
-					.onChange(async (v) => {
-						this.plugin.settings.worldFolder = v || "World";
-						await this.plugin.saveSettings();
-					})
-			);
-		new Setting(containerEl)
-			.setName("Sidebar editor")
-			.setDesc(
-				"What the Edit button on an expanded entry opens. Live Preview uses Obsidian's own editor " +
-				"(formatting shown as you type, [[link]] suggestions); Raw markdown is a plain text box. " +
-				"If Live Preview ever stops working after an Obsidian update, the plugin falls back to Raw markdown on its own."
-			)
-			.addDropdown((d) =>
-				d
-					.addOption("live", "Live Preview")
-					.addOption("raw", "Raw markdown")
-					.setValue(this.plugin.settings.inlineEditor)
-					.onChange(async (v) => {
-						this.plugin.settings.inlineEditor = v === "raw" ? "raw" : "live";
-						await this.plugin.saveSettings();
-					})
-			);
+
+	/**
+	 * Declarative settings (Obsidian 1.13.0+). Obsidian renders these, indexes them for settings
+	 * search, and reads/writes values through getControlValue/setControlValue below. Keep this
+	 * cheap: it runs on every update() and once when the tab is registered.
+	 */
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		return [
+			{
+				name: "World folder",
+				desc: "Root folder for all world-building notes.",
+				aliases: ["root", "directory", "path"],
+				control: {
+					type: "text",
+					key: "worldFolder",
+					placeholder: DEFAULT_SETTINGS.worldFolder,
+					defaultValue: DEFAULT_SETTINGS.worldFolder,
+				},
+			},
+			{
+				name: "Sidebar editor",
+				desc:
+					"What the Edit button on an expanded entry opens. Live Preview uses Obsidian's own editor " +
+					"(formatting shown as you type, [[link]] suggestions); Raw markdown is a plain text box. " +
+					"If Live Preview ever stops working after an Obsidian update, the plugin falls back to Raw markdown on its own.",
+				aliases: ["live preview", "raw markdown", "edit"],
+				control: {
+					type: "dropdown",
+					key: "inlineEditor",
+					options: { live: "Live Preview", raw: "Raw markdown" },
+					defaultValue: DEFAULT_SETTINGS.inlineEditor,
+				},
+			},
+		];
+	}
+
+	/**
+	 * Normalises values before they are stored, preserving the rules the old imperative tab
+	 * applied in its onChange handlers: an empty world folder falls back to "World", and the
+	 * editor choice is always "live" or "raw".
+	 */
+	async setControlValue(key: string, value: unknown): Promise<void> {
+		const settings = this.plugin.settings;
+		switch (key) {
+			case "worldFolder":
+				settings.worldFolder = (typeof value === "string" && value) || DEFAULT_SETTINGS.worldFolder;
+				break;
+			case "inlineEditor":
+				settings.inlineEditor = value === "raw" ? "raw" : "live";
+				break;
+			default:
+				return;
+		}
+		await this.plugin.saveSettings();
 	}
 }
 
