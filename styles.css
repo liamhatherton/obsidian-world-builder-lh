@@ -616,6 +616,7 @@
 
 .wb-modal .setting-item { border-top: none; }
 .wb-textarea { width: 100%; resize: vertical; min-height: 70px; }
+.wb-textarea-tall { min-height: 120px; }
 
 /* ─── Bookmarks ─────────────────────────────────────────────────────────── */
 

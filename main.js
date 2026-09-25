@@ -1773,8 +1773,8 @@ function createAutoTextarea(parent, cls, value, label, keys) {
   const ta = parent.createEl("textarea", { cls, attr: { spellcheck: "true", "aria-label": label } });
   ta.value = value;
   const autosize = () => {
-    ta.style.height = "auto";
-    ta.style.height = `${ta.scrollHeight + 2}px`;
+    ta.setCssStyles({ height: "auto" });
+    ta.setCssStyles({ height: `${ta.scrollHeight + 2}px` });
   };
   ta.addEventListener("input", autosize);
   ta.addEventListener("keydown", (e) => {
@@ -2312,8 +2312,7 @@ var LoreModal = class extends import_obsidian.Modal {
       d.onChange((v) => this.data.category = v);
     });
     new import_obsidian.Setting(contentEl).setName("Content").addTextArea((t) => {
-      t.inputEl.addClass("wb-textarea");
-      t.inputEl.style.minHeight = "120px";
+      t.inputEl.addClasses(["wb-textarea", "wb-textarea-tall"]);
       t.onChange((v) => this.data.content = v);
     });
     new import_obsidian.Setting(contentEl).addButton(

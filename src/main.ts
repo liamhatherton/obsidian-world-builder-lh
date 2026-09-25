@@ -2136,8 +2136,8 @@ function createAutoTextarea(parent: HTMLElement, cls: string, value: string, lab
 	ta.value = value;
 	// Grow with the text (up to the CSS max-height, then it scrolls).
 	const autosize = () => {
-		ta.style.height = "auto";
-		ta.style.height = `${ta.scrollHeight + 2}px`;
+		ta.setCssStyles({ height: "auto" });
+		ta.setCssStyles({ height: `${ta.scrollHeight + 2}px` });
 	};
 	ta.addEventListener("input", autosize);
 	ta.addEventListener("keydown", (e) => {
@@ -2708,8 +2708,7 @@ class LoreModal extends Modal {
 			d.onChange((v) => (this.data.category = v));
 		});
 		new Setting(contentEl).setName("Content").addTextArea((t) => {
-			t.inputEl.addClass("wb-textarea");
-			t.inputEl.style.minHeight = "120px";
+			t.inputEl.addClasses(["wb-textarea", "wb-textarea-tall"]);
 			t.onChange((v) => (this.data.content = v));
 		});
 
