@@ -419,7 +419,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     this.searchTargets.bookmarks = bookmarksPane.body;
     this.tabContents = contents;
     const searchBox = fixed.createDiv("wb-search");
-    (0, import_obsidian.setIcon)(searchBox.createEl("span", { cls: "wb-search-icon" }), "search");
+    (0, import_obsidian.setIcon)(searchBox.createSpan({ cls: "wb-search-icon" }), "search");
     const searchInput = searchBox.createEl("input", {
       cls: "wb-search-input",
       attr: { type: "text", spellcheck: "false" }
@@ -470,7 +470,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       contents.characters,
       `${folder}/Characters`,
       "Characters",
-      () => new CharacterModal(this.app, this.plugin, () => this.render()).open(),
+      () => new CharacterModal(this.app, this.plugin, () => void this.render()).open(),
       (fm) => {
         var _a2, _b2;
         return {
@@ -494,7 +494,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       contents.locations,
       `${folder}/Locations`,
       "Locations",
-      () => new LocationModal(this.app, this.plugin, () => this.render()).open(),
+      () => new LocationModal(this.app, this.plugin, () => void this.render()).open(),
       (fm) => {
         var _a2, _b2, _c2;
         return {
@@ -526,7 +526,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       contents.groups,
       `${folder}/Groups`,
       "Groups",
-      () => new GroupModal(this.app, this.plugin, () => this.render()).open(),
+      () => new GroupModal(this.app, this.plugin, () => void this.render()).open(),
       (fm) => {
         var _a2, _b2, _c2;
         return {
@@ -542,7 +542,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       contents.lore,
       `${folder}/Lore`,
       "Lore Entries",
-      () => new LoreModal(this.app, this.plugin, () => this.render()).open(),
+      () => new LoreModal(this.app, this.plugin, () => void this.render()).open(),
       (fm) => {
         var _a2, _b2, _c2;
         return {
@@ -558,7 +558,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       contents.timeline,
       `${folder}/Timeline`,
       "Timeline Events",
-      () => new TimelineModal(this.app, this.plugin, () => this.render()).open(),
+      () => new TimelineModal(this.app, this.plugin, () => void this.render()).open(),
       (fm) => {
         var _a2, _b2;
         return {
@@ -817,7 +817,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       const header = container.createDiv("wb-group-header");
       header.setAttribute("role", "button");
       header.setAttribute("tabindex", "0");
-      (0, import_obsidian.setIcon)(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
+      (0, import_obsidian.setIcon)(header.createSpan({ cls: "wb-group-chevron" }), "chevron-down");
       const logoSrc = key ? groupLogos.get(parseRefName(key).toLowerCase()) : void 0;
       if (logoSrc) {
         const logo = header.createEl("img", {
@@ -826,7 +826,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
         });
         logo.onerror = () => logo.remove();
       }
-      header.createEl("span", { cls: "wb-group-title", text: group.label });
+      header.createSpan({ cls: "wb-group-title", text: group.label });
       const list = container.createDiv("wb-list");
       const applyCollapsed = (collapsed) => {
         header.classList.toggle("is-collapsed", collapsed);
@@ -847,11 +847,11 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
         applyCollapsed(collapse);
         await this.plugin.saveSettings();
       };
-      header.onclick = toggleCollapsed;
+      header.onclick = () => void toggleCollapsed();
       header.onkeydown = (e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          toggleCollapsed();
+          void toggleCollapsed();
         }
       };
       const items = this.orderEntries(group.items, (_g = this.plugin.settings.characterOrder[key]) != null ? _g : []);
@@ -884,12 +884,12 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     backBtn.onclick = () => this.navigateBack();
     fwdBtn.onclick = () => this.navigateForward();
     this.navButtons.push({ back: backBtn, fwd: fwdBtn });
-    titleGroup.createEl("span", { text: label });
+    titleGroup.createSpan({ text: label });
     const actions = hdr.createDiv("wb-section-actions");
     if (reload) {
       const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary" });
-      (0, import_obsidian.setIcon)(reloadBtn.createEl("span", { cls: "wb-btn-icon" }), "refresh-cw");
-      reloadBtn.createEl("span", { text: "Reload" });
+      (0, import_obsidian.setIcon)(reloadBtn.createSpan({ cls: "wb-btn-icon" }), "refresh-cw");
+      reloadBtn.createSpan({ text: "Reload" });
       reloadBtn.onclick = async () => {
         await this.render();
         new import_obsidian.Notice("Universe Builder reloaded.");
@@ -938,8 +938,8 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       const header = container.createDiv("wb-group-header");
       header.setAttribute("role", "button");
       header.setAttribute("tabindex", "0");
-      (0, import_obsidian.setIcon)(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
-      header.createEl("span", { cls: "wb-group-title", text: label });
+      (0, import_obsidian.setIcon)(header.createSpan({ cls: "wb-group-chevron" }), "chevron-down");
+      header.createSpan({ cls: "wb-group-title", text: label });
       const list = container.createDiv("wb-list");
       const applyCollapsed = (collapsed) => {
         header.classList.toggle("is-collapsed", collapsed);
@@ -960,11 +960,11 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
         applyCollapsed(collapse);
         await this.plugin.saveSettings();
       };
-      header.onclick = toggleCollapsed;
+      header.onclick = () => void toggleCollapsed();
       header.onkeydown = (e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          toggleCollapsed();
+          void toggleCollapsed();
         }
       };
       this.renderGroupList(tab, list, groups.get(key), entries, childrenOf, getCard, opts);
@@ -1000,9 +1000,9 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     const header = group.createDiv("wb-group-header wb-subsidiary-header");
     header.setAttribute("role", "button");
     header.setAttribute("tabindex", "0");
-    (0, import_obsidian.setIcon)(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
-    header.createEl("span", { cls: "wb-group-title", text: "Subsidiaries" });
-    header.createEl("span", { cls: "wb-group-count", text: String(kids.length) });
+    (0, import_obsidian.setIcon)(header.createSpan({ cls: "wb-group-chevron" }), "chevron-down");
+    header.createSpan({ cls: "wb-group-title", text: "Subsidiaries" });
+    header.createSpan({ cls: "wb-group-count", text: String(kids.length) });
     const subList = group.createDiv("wb-list");
     const applyCollapsed = (collapsed) => {
       header.classList.toggle("is-collapsed", collapsed);
@@ -1023,11 +1023,11 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       applyCollapsed(collapse);
       await this.plugin.saveSettings();
     };
-    header.onclick = toggleCollapsed;
+    header.onclick = () => void toggleCollapsed();
     header.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        toggleCollapsed();
+        void toggleCollapsed();
       }
     };
     this.renderGroupList(tab, subList, kids, allEntries, childrenOf, getCard, opts);
@@ -1081,8 +1081,8 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     const header = list.createDiv("wb-group-header wb-tree-header");
     header.setAttribute("role", "button");
     header.setAttribute("tabindex", "0");
-    (0, import_obsidian.setIcon)(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
-    header.createEl("span", { cls: "wb-group-title", text: title });
+    (0, import_obsidian.setIcon)(header.createSpan({ cls: "wb-group-chevron" }), "chevron-down");
+    header.createSpan({ cls: "wb-group-title", text: title });
     return header;
   }
   /**
@@ -1114,7 +1114,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     });
     const toggle = () => {
       if (normalizeForSearch(this.searchQueries[tab]).trim()) return;
-      setCollapsed(!header.classList.contains("is-collapsed"));
+      void setCollapsed(!header.classList.contains("is-collapsed"));
     };
     header.onclick = toggle;
     header.onkeydown = (e) => {
@@ -1229,7 +1229,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     body.addClass("markdown-rendered");
     const bodyText = stripLeadingHeading(stripFrontmatterBlock(entry.content));
     const textOnly = stripGraphics(bodyText);
-    import_obsidian.MarkdownRenderer.render(this.app, textOnly, body, entry.file.path, this);
+    void import_obsidian.MarkdownRenderer.render(this.app, textOnly, body, entry.file.path, this);
     body.addEventListener("click", (e) => {
       var _a2;
       const target = e.target;
@@ -1247,28 +1247,28 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     });
     (0, import_obsidian.setIcon)(bookmarkBtn, "bookmark");
     this.syncBookmarkToggle(bookmarkBtn, this.plugin.settings.bookmarks.includes(entry.file.path));
-    bookmarkBtn.onclick = () => this.toggleBookmark(entry.file.path);
+    bookmarkBtn.onclick = () => void this.toggleBookmark(entry.file.path);
     const actions = footer.createDiv("wb-card-expand-actions");
     const showViewActions = () => {
       actions.empty();
       const modifyBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
-      (0, import_obsidian.setIcon)(modifyBtn.createEl("span", { cls: "wb-btn-icon" }), "file-text");
-      modifyBtn.createEl("span", { text: "Modify MD" });
+      (0, import_obsidian.setIcon)(modifyBtn.createSpan({ cls: "wb-btn-icon" }), "file-text");
+      modifyBtn.createSpan({ text: "Modify MD" });
       modifyBtn.onclick = () => this.app.workspace.getLeaf().openFile(entry.file);
       const editBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
-      (0, import_obsidian.setIcon)(editBtn.createEl("span", { cls: "wb-btn-icon" }), "pencil");
-      editBtn.createEl("span", { text: "Edit" });
+      (0, import_obsidian.setIcon)(editBtn.createSpan({ cls: "wb-btn-icon" }), "pencil");
+      editBtn.createSpan({ text: "Edit" });
       editBtn.onclick = () => void runExclusive(startEditing);
     };
     const showEditActions = () => {
       actions.empty();
       const cancelBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
-      (0, import_obsidian.setIcon)(cancelBtn.createEl("span", { cls: "wb-btn-icon" }), "x");
-      cancelBtn.createEl("span", { text: "Cancel" });
+      (0, import_obsidian.setIcon)(cancelBtn.createSpan({ cls: "wb-btn-icon" }), "x");
+      cancelBtn.createSpan({ text: "Cancel" });
       cancelBtn.onclick = () => void runExclusive(discard);
       const saveBtn = actions.createEl("button", { cls: "wb-btn-primary", attr: { type: "button" } });
-      (0, import_obsidian.setIcon)(saveBtn.createEl("span", { cls: "wb-btn-icon" }), "check");
-      saveBtn.createEl("span", { text: "Save" });
+      (0, import_obsidian.setIcon)(saveBtn.createSpan({ cls: "wb-btn-icon" }), "check");
+      saveBtn.createSpan({ text: "Save" });
       saveBtn.onclick = () => void runExclusive(finishEditing);
     };
     let editor = null;
@@ -1514,8 +1514,8 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       const header = container.createDiv("wb-group-header");
       header.setAttribute("role", "button");
       header.setAttribute("tabindex", "0");
-      (0, import_obsidian.setIcon)(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
-      header.createEl("span", { cls: "wb-group-title", text: SECTION_LABELS[section] });
+      (0, import_obsidian.setIcon)(header.createSpan({ cls: "wb-group-chevron" }), "chevron-down");
+      header.createSpan({ cls: "wb-group-title", text: SECTION_LABELS[section] });
       const list = container.createDiv("wb-list");
       const applyCollapsed = (collapsed) => {
         header.classList.toggle("is-collapsed", collapsed);
@@ -1531,11 +1531,11 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
         applyCollapsed(collapse);
         await this.plugin.saveSettings();
       };
-      header.onclick = toggleCollapsed;
+      header.onclick = () => void toggleCollapsed();
       header.onkeydown = (e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          toggleCollapsed();
+          void toggleCollapsed();
         }
       };
       for (const entry of items) this.renderCard(tab, list, entry, cfg.getCard, cfg.thumbs, cfg.stackBadge, true);
@@ -1637,7 +1637,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     }
     const tab = this.findEntryTab(dest);
     if (!tab) {
-      this.app.workspace.getLeaf().openFile(dest);
+      void this.app.workspace.getLeaf().openFile(dest);
       return;
     }
     if (tab !== this.activeTab) this.switchTab(tab);
@@ -1746,7 +1746,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     list.addEventListener("dragleave", (e) => {
       if (!list.contains(e.relatedTarget)) clearMarks();
     });
-    list.addEventListener("drop", async (e) => {
+    const handleDrop = async (e) => {
       if (!dragged) return;
       e.preventDefault();
       e.stopPropagation();
@@ -1767,7 +1767,8 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
         await onReorder(order);
       }
       clearMarks();
-    });
+    };
+    list.addEventListener("drop", (e) => void handleDrop(e));
   }
 };
 function splitFrontmatter(text) {
@@ -1818,16 +1819,21 @@ function createRawEditor(anchor, file, text, keys) {
 var LIVE_PREVIEW_TEXT_SCALE = 0.75;
 var livePreviewEditorClass;
 function resolveLivePreviewEditorClass(app) {
-  var _a, _b, _c, _d;
+  var _a, _b;
   if (livePreviewEditorClass !== void 0) return livePreviewEditorClass;
   livePreviewEditorClass = null;
   try {
-    const embed = (_c = (_b = (_a = app.embedRegistry) == null ? void 0 : _a.embedByExtension) == null ? void 0 : _b.md) == null ? void 0 : _c.call(_b, { app, containerEl: createDiv(), state: {} }, null, "");
+    const registry = app.embedRegistry;
+    const embed = (_b = (_a = registry == null ? void 0 : registry.embedByExtension) == null ? void 0 : _a.md) == null ? void 0 : _b.call(_a, { app, containerEl: createDiv(), state: {} }, null, "");
     if (embed) {
       embed.load();
       embed.editable = true;
       embed.showEditor();
-      const ctor = embed.editMode ? (_d = Object.getPrototypeOf(Object.getPrototypeOf(embed.editMode))) == null ? void 0 : _d.constructor : null;
+      let ctor = null;
+      if (embed.editMode) {
+        const proto = Object.getPrototypeOf(Object.getPrototypeOf(embed.editMode));
+        ctor = proto == null ? void 0 : proto.constructor;
+      }
       embed.unload();
       if (typeof ctor === "function") livePreviewEditorClass = ctor;
     }
@@ -1853,6 +1859,7 @@ function createLivePreviewEditor(app, parent, anchor, file, text, keys) {
   let cmp = null;
   const owner = {
     app,
+    hoverPopover: null,
     showSearch: () => {
     },
     toggleMode: () => {
@@ -1876,7 +1883,8 @@ function createLivePreviewEditor(app, parent, anchor, file, text, keys) {
     get(target, prop, receiver) {
       var _a;
       if (prop === "config") {
-        return new Proxy((_a = target.config) != null ? _a : {}, {
+        const config = (_a = target.config) != null ? _a : {};
+        return new Proxy(config, {
           get(cfg, key, r) {
             if (key === "showLineNumber" || key === "foldHeading" || key === "foldIndent") return false;
             return Reflect.get(cfg, key, r);
@@ -1899,10 +1907,11 @@ function createLivePreviewEditor(app, parent, anchor, file, text, keys) {
       updateBottomPadding() {
       }
     }
-    cmp = new SidebarMarkdownEditor(appProxy, host, owner);
-    parent.addChild(cmp);
-    owner.editMode = cmp;
-    cmp.set(bodyText);
+    const editor = new SidebarMarkdownEditor(appProxy, host, owner);
+    cmp = editor;
+    parent.addChild(editor);
+    owner.editMode = editor;
+    editor.set(bodyText);
     initialBody = getBodyValue();
   } catch (err) {
     console.warn("Universe Builder: couldn't create the Live Preview editor; using the raw markdown editor.", err);
@@ -1971,7 +1980,7 @@ function createLivePreviewEditor(app, parent, anchor, file, text, keys) {
       popScope();
       if (app.workspace.activeEditor === owner) app.workspace.activeEditor = null;
       try {
-        parent.removeChild(cmp);
+        if (cmp) parent.removeChild(cmp);
       } catch (e) {
       }
       wrap.remove();
@@ -2053,7 +2062,7 @@ var CharacterModal = class extends import_obsidian.Modal {
       t.onChange((v) => this.data.goals = v);
     });
     new import_obsidian.Setting(contentEl).addButton(
-      (b) => b.setButtonText("Create").setCta().onClick(() => this.submit())
+      (b) => b.setButtonText("Create").setCta().onClick(() => void this.submit())
     );
   }
   async submit() {
@@ -2151,7 +2160,7 @@ var LocationModal = class extends import_obsidian.Modal {
       t.onChange((v) => this.data.secrets = v);
     });
     new import_obsidian.Setting(contentEl).addButton(
-      (b) => b.setButtonText("Create").setCta().onClick(() => this.submit())
+      (b) => b.setButtonText("Create").setCta().onClick(() => void this.submit())
     );
   }
   async submit() {
@@ -2255,7 +2264,7 @@ var GroupModal = class extends import_obsidian.Modal {
       t.onChange((v) => this.data.description = v);
     });
     new import_obsidian.Setting(contentEl).addButton(
-      (b) => b.setButtonText("Create").setCta().onClick(() => this.submit())
+      (b) => b.setButtonText("Create").setCta().onClick(() => void this.submit())
     );
   }
   async submit() {
@@ -2322,7 +2331,7 @@ var LoreModal = class extends import_obsidian.Modal {
       t.onChange((v) => this.data.content = v);
     });
     new import_obsidian.Setting(contentEl).addButton(
-      (b) => b.setButtonText("Create").setCta().onClick(() => this.submit())
+      (b) => b.setButtonText("Create").setCta().onClick(() => void this.submit())
     );
   }
   async submit() {
@@ -2382,7 +2391,7 @@ var TimelineModal = class extends import_obsidian.Modal {
       t.setPlaceholder("Comma-separated names").onChange((v) => this.data.locations = v);
     });
     new import_obsidian.Setting(contentEl).addButton(
-      (b) => b.setButtonText("Create").setCta().onClick(() => this.submit())
+      (b) => b.setButtonText("Create").setCta().onClick(() => void this.submit())
     );
   }
   async submit() {
@@ -2478,11 +2487,11 @@ var UniverseBuilderPlugin = class extends import_obsidian.Plugin {
   async onload() {
     await this.loadSettings();
     this.registerView(VIEW_TYPE, (leaf) => new UniverseBuilderView(leaf, this));
-    this.addRibbonIcon("orbit", "Universe Builder", () => this.activateSidebar());
+    this.addRibbonIcon("orbit", "Universe Builder", () => void this.activateSidebar());
     this.addCommand({
       id: "open-sidebar",
       name: "Open Universe Builder sidebar",
-      callback: () => this.activateSidebar()
+      callback: () => void this.activateSidebar()
     });
     this.addCommand({
       id: "new-character",
@@ -2557,12 +2566,12 @@ var UniverseBuilderPlugin = class extends import_obsidian.Plugin {
       leaf = (_a = workspace.getRightLeaf(false)) != null ? _a : workspace.getLeaf(true);
       await leaf.setViewState({ type: VIEW_TYPE, active: true });
     }
-    workspace.revealLeaf(leaf);
+    await workspace.revealLeaf(leaf);
   }
   refreshSidebar() {
     const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
     if ((leaf == null ? void 0 : leaf.view) instanceof UniverseBuilderView) {
-      leaf.view.render();
+      void leaf.view.render();
     }
   }
   async loadSettings() {

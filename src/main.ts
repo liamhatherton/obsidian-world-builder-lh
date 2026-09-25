@@ -5,6 +5,7 @@ import {
 	Modal,
 	Notice,
 	Component,
+	Editor,
 	Plugin,
 	PluginSettingTab,
 	Scope,
@@ -16,7 +17,7 @@ import {
 	normalizePath,
 	WorkspaceLeaf,
 } from "obsidian";
-import type { SettingDefinitionItem } from "obsidian";
+import type { MarkdownFileInfo, SettingDefinitionItem } from "obsidian";
 
 /**
  * Markdown files inside `folderPath` (recursively), found by walking that folder only,
@@ -58,6 +59,13 @@ interface UniverseBuilderSettings {
 	 */
 	inlineEditor: "live" | "raw";
 }
+/** Keys written by versions from before the "Employers" tab was renamed to "Groups". */
+interface LegacySettings {
+	collapsedEmployers?: string[];
+	collapsedEmployerTypes?: string[];
+}
+/** What loadData() may hand back: any subset of the current settings, plus legacy keys. */
+type StoredSettings = Partial<UniverseBuilderSettings> & LegacySettings;
 const DEFAULT_SETTINGS: UniverseBuilderSettings = {
 	worldFolder: "World",
 	characterOrder: {},
@@ -121,7 +129,7 @@ function stripLeadingHeading(markdown: string): string {
 function stripGraphics(markdown: string): string {
 	return markdown
 		.replace(/!\[\[([^\]]+)\]\]/g, (match: string, inner: string) => {
-			const target = inner.split("|")[0]!.split("#")[0]!.trim();
+			const target = inner.split("|")[0].split("#")[0].trim();
 			return IMG_EXT.test(target) ? "" : match;
 		})
 		.replace(/!\[[^\]]*\]\((?:<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\)/g, "") // ![alt](path)
@@ -268,8 +276,8 @@ function normalizeForSearch(s: string): string {
 function parseRefName(raw: string): string {
 	const trimmed = raw.trim();
 	const m = trimmed.match(/^\[\[([^\]]+)\]\]$/);
-	const inner = m ? m[1]! : trimmed;
-	return inner.split("|")[0]!.split("#")[0]!.trim();
+	const inner = m ? m[1] : trimmed;
+	return inner.split("|")[0].split("#")[0].trim();
 }
 
 /**
@@ -580,7 +588,7 @@ class UniverseBuilderView extends ItemView {
 
 		// Search bar: last part of the fixed region, under the section header. Each tab keeps its own text.
 		const searchBox = fixed.createDiv("wb-search");
-		setIcon(searchBox.createEl("span", { cls: "wb-search-icon" }), "search");
+		setIcon(searchBox.createSpan({ cls: "wb-search-icon" }), "search");
 		const searchInput = searchBox.createEl("input", {
 			cls: "wb-search-input",
 			attr: { type: "text", spellcheck: "false" },
@@ -634,7 +642,7 @@ class UniverseBuilderView extends ItemView {
 			contents.characters!,
 			`${folder}/Characters`,
 			"Characters",
-			() => new CharacterModal(this.app, this.plugin, () => this.render()).open(),
+			() => new CharacterModal(this.app, this.plugin, () => void this.render()).open(),
 			(fm) => ({
 				title: fm.name ?? "Unnamed",
 				// Two lines: age/home, then group/ship (a line with no values is dropped).
@@ -656,7 +664,7 @@ class UniverseBuilderView extends ItemView {
 			contents.locations!,
 			`${folder}/Locations`,
 			"Locations",
-			() => new LocationModal(this.app, this.plugin, () => this.render()).open(),
+			() => new LocationModal(this.app, this.plugin, () => void this.render()).open(),
 			(fm) => ({
 				title: fm.name ?? "Unnamed",
 				// Type already shows as the badge, so the sub-line is just the parent location.
@@ -680,7 +688,7 @@ class UniverseBuilderView extends ItemView {
 			contents.groups!,
 			`${folder}/Groups`,
 			"Groups",
-			() => new GroupModal(this.app, this.plugin, () => this.render()).open(),
+			() => new GroupModal(this.app, this.plugin, () => void this.render()).open(),
 			(fm) => ({
 				title: fm.name ?? "Unnamed",
 				meta: fm.goals ?? "",
@@ -694,7 +702,7 @@ class UniverseBuilderView extends ItemView {
 			contents.lore!,
 			`${folder}/Lore`,
 			"Lore Entries",
-			() => new LoreModal(this.app, this.plugin, () => this.render()).open(),
+			() => new LoreModal(this.app, this.plugin, () => void this.render()).open(),
 			(fm) => ({
 				title: fm.title ?? "Untitled",
 				meta: fm.category ?? "",
@@ -708,7 +716,7 @@ class UniverseBuilderView extends ItemView {
 			contents.timeline!,
 			`${folder}/Timeline`,
 			"Timeline Events",
-			() => new TimelineModal(this.app, this.plugin, () => this.render()).open(),
+			() => new TimelineModal(this.app, this.plugin, () => void this.render()).open(),
 			(fm) => ({
 				title: fm.title ?? "Untitled",
 				meta: fm.date ?? "",
@@ -859,17 +867,17 @@ class UniverseBuilderView extends ItemView {
 			let target: string;
 			if (m[1] !== undefined) {
 				// Wiki embed: ![[image.png|300]]
-				target = m[1].split("|")[0]!.split("#")[0]!.trim();
+				target = m[1].split("|")[0].split("#")[0].trim();
 			} else {
 				// Markdown embed: ![alt](path/to/image.png)
 				target = (m[2] ?? "").trim();
 				if (target.startsWith("<") && target.endsWith(">")) target = target.slice(1, -1);
 				if (/^https?:\/\//i.test(target)) {
-					if (IMG_EXT.test(target.split(/[?#]/)[0]!)) return target;
+					if (IMG_EXT.test(target.split(/[?#]/)[0])) return target;
 					continue;
 				}
 				try { target = decodeURIComponent(target); } catch (e) { /* keep as-is */ }
-				target = target.split("#")[0]!;
+				target = target.split("#")[0];
 			}
 			if (!IMG_EXT.test(target)) continue;
 			const dest =
@@ -1004,7 +1012,7 @@ class UniverseBuilderView extends ItemView {
 			const header = container.createDiv("wb-group-header");
 			header.setAttribute("role", "button");
 			header.setAttribute("tabindex", "0");
-			setIcon(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
+			setIcon(header.createSpan({ cls: "wb-group-chevron" }), "chevron-down");
 			const logoSrc = key ? groupLogos.get(parseRefName(key).toLowerCase()) : undefined;
 			if (logoSrc) {
 				const logo = header.createEl("img", {
@@ -1013,7 +1021,7 @@ class UniverseBuilderView extends ItemView {
 				});
 				logo.onerror = () => logo.remove();
 			}
-			header.createEl("span", { cls: "wb-group-title", text: group.label });
+			header.createSpan({ cls: "wb-group-title", text: group.label });
 			const list = container.createDiv("wb-list");
 
 			const applyCollapsed = (collapsed: boolean) => {
@@ -1039,11 +1047,11 @@ class UniverseBuilderView extends ItemView {
 				applyCollapsed(collapse);
 				await this.plugin.saveSettings();
 			};
-			header.onclick = toggleCollapsed;
+			header.onclick = () => void toggleCollapsed();
 			header.onkeydown = (e) => {
 				if (e.key === "Enter" || e.key === " ") {
 					e.preventDefault();
-					toggleCollapsed();
+					void toggleCollapsed();
 				}
 			};
 
@@ -1082,12 +1090,12 @@ class UniverseBuilderView extends ItemView {
 		backBtn.onclick = () => this.navigateBack();
 		fwdBtn.onclick = () => this.navigateForward();
 		this.navButtons.push({ back: backBtn, fwd: fwdBtn });
-		titleGroup.createEl("span", { text: label });
+		titleGroup.createSpan({ text: label });
 		const actions = hdr.createDiv("wb-section-actions");
 		if (reload) {
 			const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary" });
-			setIcon(reloadBtn.createEl("span", { cls: "wb-btn-icon" }), "refresh-cw");
-			reloadBtn.createEl("span", { text: "Reload" });
+			setIcon(reloadBtn.createSpan({ cls: "wb-btn-icon" }), "refresh-cw");
+			reloadBtn.createSpan({ text: "Reload" });
 			reloadBtn.onclick = async () => {
 				await this.render();
 				new Notice("Universe Builder reloaded.");
@@ -1138,8 +1146,8 @@ class UniverseBuilderView extends ItemView {
 			const header = container.createDiv("wb-group-header");
 			header.setAttribute("role", "button");
 			header.setAttribute("tabindex", "0");
-			setIcon(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
-			header.createEl("span", { cls: "wb-group-title", text: label });
+			setIcon(header.createSpan({ cls: "wb-group-chevron" }), "chevron-down");
+			header.createSpan({ cls: "wb-group-title", text: label });
 			const list = container.createDiv("wb-list");
 
 			const applyCollapsed = (collapsed: boolean) => {
@@ -1165,11 +1173,11 @@ class UniverseBuilderView extends ItemView {
 				applyCollapsed(collapse);
 				await this.plugin.saveSettings();
 			};
-			header.onclick = toggleCollapsed;
+			header.onclick = () => void toggleCollapsed();
 			header.onkeydown = (e) => {
 				if (e.key === "Enter" || e.key === " ") {
 					e.preventDefault();
-					toggleCollapsed();
+					void toggleCollapsed();
 				}
 			};
 
@@ -1223,9 +1231,9 @@ class UniverseBuilderView extends ItemView {
 		const header = group.createDiv("wb-group-header wb-subsidiary-header");
 		header.setAttribute("role", "button");
 		header.setAttribute("tabindex", "0");
-		setIcon(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
-		header.createEl("span", { cls: "wb-group-title", text: "Subsidiaries" });
-		header.createEl("span", { cls: "wb-group-count", text: String(kids.length) });
+		setIcon(header.createSpan({ cls: "wb-group-chevron" }), "chevron-down");
+		header.createSpan({ cls: "wb-group-title", text: "Subsidiaries" });
+		header.createSpan({ cls: "wb-group-count", text: String(kids.length) });
 		const subList = group.createDiv("wb-list");
 
 		const applyCollapsed = (collapsed: boolean) => {
@@ -1251,11 +1259,11 @@ class UniverseBuilderView extends ItemView {
 			applyCollapsed(collapse);
 			await this.plugin.saveSettings();
 		};
-		header.onclick = toggleCollapsed;
+		header.onclick = () => void toggleCollapsed();
 		header.onkeydown = (e) => {
 			if (e.key === "Enter" || e.key === " ") {
 				e.preventDefault();
-				toggleCollapsed();
+				void toggleCollapsed();
 			}
 		};
 
@@ -1326,8 +1334,8 @@ class UniverseBuilderView extends ItemView {
 		const header = list.createDiv("wb-group-header wb-tree-header");
 		header.setAttribute("role", "button");
 		header.setAttribute("tabindex", "0");
-		setIcon(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
-		header.createEl("span", { cls: "wb-group-title", text: title });
+		setIcon(header.createSpan({ cls: "wb-group-chevron" }), "chevron-down");
+		header.createSpan({ cls: "wb-group-title", text: title });
 		return header;
 	}
 
@@ -1365,7 +1373,7 @@ class UniverseBuilderView extends ItemView {
 		const toggle = () => {
 			// While searching, matching entries are shown open regardless; leave the saved state alone.
 			if (normalizeForSearch(this.searchQueries[tab]).trim()) return;
-			setCollapsed(!header.classList.contains("is-collapsed"));
+			void setCollapsed(!header.classList.contains("is-collapsed"));
 		};
 		header.onclick = toggle;
 		header.onkeydown = (e) => {
@@ -1510,7 +1518,7 @@ class UniverseBuilderView extends ItemView {
 		// restates the card's own title.
 		const bodyText = stripLeadingHeading(stripFrontmatterBlock(entry.content));
 		const textOnly = stripGraphics(bodyText);
-		MarkdownRenderer.render(this.app, textOnly, body, entry.file.path, this);
+		void MarkdownRenderer.render(this.app, textOnly, body, entry.file.path, this);
 
 		// Wiki-links in the preview (e.g. "Part of: [[Colonia]]") are rendered as clickable text but
 		// do nothing on their own; jump to the linked note's own card instead of leaving the sidebar.
@@ -1533,7 +1541,7 @@ class UniverseBuilderView extends ItemView {
 		});
 		setIcon(bookmarkBtn, "bookmark");
 		this.syncBookmarkToggle(bookmarkBtn, this.plugin.settings.bookmarks.includes(entry.file.path));
-		bookmarkBtn.onclick = () => this.toggleBookmark(entry.file.path);
+		bookmarkBtn.onclick = () => void this.toggleBookmark(entry.file.path);
 
 		// Right-hand group: [Modify MD] [Edit] while reading, swapped for [Cancel] [Save] while editing inline.
 		const actions = footer.createDiv("wb-card-expand-actions");
@@ -1541,24 +1549,24 @@ class UniverseBuilderView extends ItemView {
 			actions.empty();
 			// Modify MD: opens the note in the main editor (what Edit used to do).
 			const modifyBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
-			setIcon(modifyBtn.createEl("span", { cls: "wb-btn-icon" }), "file-text");
-			modifyBtn.createEl("span", { text: "Modify MD" });
+			setIcon(modifyBtn.createSpan({ cls: "wb-btn-icon" }), "file-text");
+			modifyBtn.createSpan({ text: "Modify MD" });
 			modifyBtn.onclick = () => this.app.workspace.getLeaf().openFile(entry.file);
 			// Edit: edits the note's markdown right here in the sidebar.
 			const editBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
-			setIcon(editBtn.createEl("span", { cls: "wb-btn-icon" }), "pencil");
-			editBtn.createEl("span", { text: "Edit" });
+			setIcon(editBtn.createSpan({ cls: "wb-btn-icon" }), "pencil");
+			editBtn.createSpan({ text: "Edit" });
 			editBtn.onclick = () => void runExclusive(startEditing);
 		};
 		const showEditActions = () => {
 			actions.empty();
 			const cancelBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
-			setIcon(cancelBtn.createEl("span", { cls: "wb-btn-icon" }), "x");
-			cancelBtn.createEl("span", { text: "Cancel" });
+			setIcon(cancelBtn.createSpan({ cls: "wb-btn-icon" }), "x");
+			cancelBtn.createSpan({ text: "Cancel" });
 			cancelBtn.onclick = () => void runExclusive(discard);
 			const saveBtn = actions.createEl("button", { cls: "wb-btn-primary", attr: { type: "button" } });
-			setIcon(saveBtn.createEl("span", { cls: "wb-btn-icon" }), "check");
-			saveBtn.createEl("span", { text: "Save" });
+			setIcon(saveBtn.createSpan({ cls: "wb-btn-icon" }), "check");
+			saveBtn.createSpan({ text: "Save" });
 			saveBtn.onclick = () => void runExclusive(finishEditing);
 		};
 
@@ -1835,8 +1843,8 @@ class UniverseBuilderView extends ItemView {
 			const header = container.createDiv("wb-group-header");
 			header.setAttribute("role", "button");
 			header.setAttribute("tabindex", "0");
-			setIcon(header.createEl("span", { cls: "wb-group-chevron" }), "chevron-down");
-			header.createEl("span", { cls: "wb-group-title", text: SECTION_LABELS[section] });
+			setIcon(header.createSpan({ cls: "wb-group-chevron" }), "chevron-down");
+			header.createSpan({ cls: "wb-group-title", text: SECTION_LABELS[section] });
 			const list = container.createDiv("wb-list");
 
 			const applyCollapsed = (collapsed: boolean) => {
@@ -1855,11 +1863,11 @@ class UniverseBuilderView extends ItemView {
 				applyCollapsed(collapse);
 				await this.plugin.saveSettings();
 			};
-			header.onclick = toggleCollapsed;
+			header.onclick = () => void toggleCollapsed();
 			header.onkeydown = (e) => {
 				if (e.key === "Enter" || e.key === " ") {
 					e.preventDefault();
-					toggleCollapsed();
+					void toggleCollapsed();
 				}
 			};
 
@@ -1966,7 +1974,7 @@ class UniverseBuilderView extends ItemView {
 	 * unresolved link) falls back to Obsidian's normal "open the note" behavior.
 	 */
 	private followWikiLink(linktext: string, sourcePath: string) {
-		const linkPath = linktext.split("#")[0]!;
+		const linkPath = linktext.split("#")[0];
 		const dest = this.app.metadataCache.getFirstLinkpathDest(linkPath, sourcePath);
 		if (!dest) {
 			new Notice(`Couldn't find "${linktext}".`);
@@ -1974,7 +1982,7 @@ class UniverseBuilderView extends ItemView {
 		}
 		const tab = this.findEntryTab(dest);
 		if (!tab) {
-			this.app.workspace.getLeaf().openFile(dest);
+			void this.app.workspace.getLeaf().openFile(dest);
 			return;
 		}
 		if (tab !== this.activeTab) this.switchTab(tab);
@@ -2094,14 +2102,14 @@ class UniverseBuilderView extends ItemView {
 			dropTarget = target;
 			dropAfter = e.clientY >= r.top + r.height / 2;
 			const unit = unitOf(target);
-			(dropAfter ? unit[unit.length - 1]! : unit[0]!).classList.add(dropAfter ? "wb-drop-after" : "wb-drop-before");
+			(dropAfter ? unit[unit.length - 1] : unit[0]).classList.add(dropAfter ? "wb-drop-after" : "wb-drop-before");
 		});
 
 		list.addEventListener("dragleave", (e) => {
 			if (!list.contains(e.relatedTarget as Node | null)) clearMarks();
 		});
 
-		list.addEventListener("drop", async (e) => {
+		const handleDrop = async (e: DragEvent) => {
 			if (!dragged) return;
 			e.preventDefault();
 			e.stopPropagation();
@@ -2109,7 +2117,7 @@ class UniverseBuilderView extends ItemView {
 			if (dropTarget && dropTarget !== moving) {
 				const movingParts = unitOf(moving);
 				const targetParts = unitOf(dropTarget);
-				const ref = dropAfter ? targetParts[targetParts.length - 1]!.nextSibling : targetParts[0]!;
+				const ref = dropAfter ? targetParts[targetParts.length - 1].nextSibling : targetParts[0];
 				// Dropping right where the unit already sits leaves it in place.
 				if (!movingParts.includes(ref as HTMLElement)) {
 					for (const part of movingParts) list.insertBefore(part, ref);
@@ -2120,7 +2128,8 @@ class UniverseBuilderView extends ItemView {
 				await onReorder(order);
 			}
 			clearMarks();
-		});
+		};
+		list.addEventListener("drop", (e) => void handleDrop(e));
 	}
 }
 
@@ -2141,7 +2150,7 @@ interface InlineEditorKeys { save: () => void; cancel: () => void; }
 function splitFrontmatter(text: string): { open: string; yaml: string; close: string; body: string } | null {
 	const m = text.match(/^(---\r?\n)([\s\S]*?)(\r?\n---[ \t]*(?:\r?\n|$))/);
 	if (!m) return null;
-	return { open: m[1]!, yaml: m[2]!, close: m[3]!, body: text.slice(m[0].length) };
+	return { open: m[1], yaml: m[2], close: m[3], body: text.slice(m[0].length) };
 }
 
 /** Plain auto-growing textarea (used for the whole note in raw mode, and for the Properties box in Live Preview mode). */
@@ -2217,7 +2226,26 @@ function createRawEditor(anchor: HTMLElement, file: TFile, text: string, keys: I
  */
 /** Text size of the sidebar's Live Preview editor relative to the main editor (0.75 = 25% smaller). */
 const LIVE_PREVIEW_TEXT_SCALE = 0.75;
-type LivePreviewEditorClass = new (app: App, containerEl: HTMLElement, owner: unknown) => any;
+/** The parts of Obsidian's internal (undocumented) markdown editor component this plugin touches. */
+interface LivePreviewEditor extends Component {
+	editor?: Editor;
+	cm?: { state?: { doc?: { toString(): string } } };
+	set(text: string, clear?: boolean): void;
+}
+type LivePreviewEditorClass = new (app: App, containerEl: HTMLElement, owner: MarkdownFileInfo) => LivePreviewEditor;
+/** Internal embed created by app.embedRegistry for a markdown file (undocumented API). */
+interface InternalMarkdownEmbed {
+	editable: boolean;
+	editMode?: object | null;
+	load(): void;
+	unload(): void;
+	showEditor(): void;
+}
+interface InternalEmbedRegistry {
+	embedByExtension?: {
+		md?: (ctx: { app: App; containerEl: HTMLElement; state: Record<string, unknown> }, file: TFile | null, subpath: string) => InternalMarkdownEmbed | null | undefined;
+	};
+}
 /** undefined = not looked up yet; null = unavailable in this Obsidian version (use the raw editor). */
 let livePreviewEditorClass: LivePreviewEditorClass | null | undefined;
 
@@ -2225,12 +2253,17 @@ function resolveLivePreviewEditorClass(app: App): LivePreviewEditorClass | null 
 	if (livePreviewEditorClass !== undefined) return livePreviewEditorClass;
 	livePreviewEditorClass = null;
 	try {
-		const embed = (app as any).embedRegistry?.embedByExtension?.md?.({ app, containerEl: createDiv(), state: {} }, null, "");
+		const registry = (app as App & { embedRegistry?: InternalEmbedRegistry }).embedRegistry;
+		const embed = registry?.embedByExtension?.md?.({ app, containerEl: createDiv(), state: {} }, null, "");
 		if (embed) {
 			embed.load();
 			embed.editable = true;
 			embed.showEditor();
-			const ctor = embed.editMode ? Object.getPrototypeOf(Object.getPrototypeOf(embed.editMode))?.constructor : null;
+			let ctor: unknown = null;
+			if (embed.editMode) {
+				const proto = Object.getPrototypeOf(Object.getPrototypeOf(embed.editMode) as object) as { constructor?: unknown } | null;
+				ctor = proto?.constructor;
+			}
 			embed.unload();
 			if (typeof ctor === "function") livePreviewEditorClass = ctor as LivePreviewEditorClass;
 		}
@@ -2271,10 +2304,11 @@ function createLivePreviewEditor(
 	const baseSize = parseFloat(getComputedStyle(host).getPropertyValue("--font-text-size")) || 16;
 	host.style.setProperty("--font-text-size", `${baseSize * LIVE_PREVIEW_TEXT_SCALE}px`);
 
-	let cmp: any = null;
+	let cmp: LivePreviewEditor | null = null;
 	// Stand-in for the MarkdownView the editor normally lives in (same shape Kanban uses).
-	const owner: any = {
+	const owner: MarkdownFileInfo & Record<string, unknown> & { editMode: LivePreviewEditor | null } = {
 		app,
+		hoverPopover: null,
 		showSearch: () => {},
 		toggleMode: () => {},
 		onMarkdownScroll: () => {},
@@ -2289,19 +2323,20 @@ function createLivePreviewEditor(
 	const vaultProxy = new Proxy(app.vault, {
 		get(target, prop, receiver) {
 			if (prop === "config") {
-				return new Proxy((target as any).config ?? {}, {
+				const config = (target as Vault & { config?: Record<string, unknown> }).config ?? {};
+				return new Proxy(config, {
 					get(cfg, key, r) {
 						if (key === "showLineNumber" || key === "foldHeading" || key === "foldIndent") return false;
-						return Reflect.get(cfg, key, r);
+						return Reflect.get(cfg, key, r) as unknown;
 					},
 				});
 			}
-			return Reflect.get(target, prop, receiver);
+			return Reflect.get(target, prop, receiver) as unknown;
 		},
 	});
 	const appProxy = new Proxy(app, {
 		get(target, prop, receiver) {
-			return prop === "vault" ? vaultProxy : Reflect.get(target, prop, receiver);
+			return prop === "vault" ? vaultProxy : (Reflect.get(target, prop, receiver) as unknown);
 		},
 	});
 
@@ -2312,10 +2347,11 @@ function createLivePreviewEditor(
 			// The stock editor pads the bottom so the last line can scroll to mid-screen; not wanted in a card.
 			updateBottomPadding() {}
 		}
-		cmp = new SidebarMarkdownEditor(appProxy as App, host, owner);
-		parent.addChild(cmp);
-		owner.editMode = cmp;
-		cmp.set(bodyText);
+		const editor = new SidebarMarkdownEditor(appProxy, host, owner);
+		cmp = editor;
+		parent.addChild(editor);
+		owner.editMode = editor;
+		editor.set(bodyText);
 		initialBody = getBodyValue(); // the editor may normalise line endings; compare against what it holds
 	} catch (err) {
 		console.warn("Universe Builder: couldn't create the Live Preview editor; using the raw markdown editor.", err);
@@ -2342,7 +2378,7 @@ function createLivePreviewEditor(
 	host.addEventListener("focusin", () => {
 		if (!scopePushed) { app.keymap.pushScope(scope); scopePushed = true; }
 		// Lets editor commands and hotkeys (bold, toggle checklist, ...) act on this editor.
-		(app.workspace as any).activeEditor = owner;
+		app.workspace.activeEditor = owner;
 	});
 	host.addEventListener("focusout", (e) => {
 		if (!host.contains(e.relatedTarget as Node | null)) popScope();
@@ -2369,8 +2405,8 @@ function createLivePreviewEditor(
 			if (destroyed) return;
 			destroyed = true;
 			popScope();
-			if ((app.workspace as any).activeEditor === owner) (app.workspace as any).activeEditor = null;
-			try { parent.removeChild(cmp); } catch { /* ignore */ }
+			if (app.workspace.activeEditor === owner) app.workspace.activeEditor = null;
+			try { if (cmp) parent.removeChild(cmp); } catch { /* ignore */ }
 			wrap.remove();
 		},
 	};
@@ -2451,7 +2487,7 @@ class CharacterModal extends Modal {
 		});
 
 		new Setting(contentEl).addButton((b) =>
-			b.setButtonText("Create").setCta().onClick(() => this.submit())
+			b.setButtonText("Create").setCta().onClick(() => void this.submit())
 		);
 	}
 
@@ -2551,7 +2587,7 @@ class LocationModal extends Modal {
 		});
 
 		new Setting(contentEl).addButton((b) =>
-			b.setButtonText("Create").setCta().onClick(() => this.submit())
+			b.setButtonText("Create").setCta().onClick(() => void this.submit())
 		);
 	}
 
@@ -2620,7 +2656,7 @@ class GroupModal extends Modal {
 		const existing = Array.from(new Set(
 			getMarkdownFilesIn(this.app, folder)
 				.map((f) => {
-					const name = this.app.metadataCache.getFileCache(f)?.frontmatter?.name;
+					const name: unknown = this.app.metadataCache.getFileCache(f)?.frontmatter?.name;
 					return (typeof name === "string" && name.trim()) ? name.trim() : f.basename;
 				})
 		)).sort((a, b) => a.localeCompare(b));
@@ -2656,7 +2692,7 @@ class GroupModal extends Modal {
 		});
 
 		new Setting(contentEl).addButton((b) =>
-			b.setButtonText("Create").setCta().onClick(() => this.submit())
+			b.setButtonText("Create").setCta().onClick(() => void this.submit())
 		);
 	}
 
@@ -2726,7 +2762,7 @@ class LoreModal extends Modal {
 		});
 
 		new Setting(contentEl).addButton((b) =>
-			b.setButtonText("Create").setCta().onClick(() => this.submit())
+			b.setButtonText("Create").setCta().onClick(() => void this.submit())
 		);
 	}
 
@@ -2790,7 +2826,7 @@ class TimelineModal extends Modal {
 		});
 
 		new Setting(contentEl).addButton((b) =>
-			b.setButtonText("Create").setCta().onClick(() => this.submit())
+			b.setButtonText("Create").setCta().onClick(() => void this.submit())
 		);
 	}
 
@@ -2899,12 +2935,12 @@ export default class UniverseBuilderPlugin extends Plugin {
 
 		this.registerView(VIEW_TYPE, (leaf) => new UniverseBuilderView(leaf, this));
 
-		this.addRibbonIcon("orbit", "Universe Builder", () => this.activateSidebar());
+		this.addRibbonIcon("orbit", "Universe Builder", () => void this.activateSidebar());
 
 		this.addCommand({
 			id: "open-sidebar",
 			name: "Open Universe Builder sidebar",
-			callback: () => this.activateSidebar(),
+			callback: () => void this.activateSidebar(),
 		});
 		this.addCommand({
 			id: "new-character",
@@ -2970,18 +3006,18 @@ export default class UniverseBuilderPlugin extends Plugin {
 			leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf(true);
 			await leaf.setViewState({ type: VIEW_TYPE, active: true });
 		}
-		workspace.revealLeaf(leaf);
+		await workspace.revealLeaf(leaf);
 	}
 
 	refreshSidebar() {
 		const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
 		if (leaf?.view instanceof UniverseBuilderView) {
-			(leaf.view as UniverseBuilderView).render();
+			void leaf.view.render();
 		}
 	}
 
 	async loadSettings() {
-		const data = await this.loadData();
+		const data = (await this.loadData()) as StoredSettings | null;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
 		this.settings.characterOrder = data?.characterOrder ?? {};
 		this.settings.collapsedGroups = data?.collapsedGroups ?? [];
@@ -2999,14 +3035,14 @@ export default class UniverseBuilderPlugin extends Plugin {
 	 * collapsed sections and custom ordering survive the rename. The old keys are dropped on the
 	 * next save.
 	 */
-	private migrateLegacySettings(data: any) {
+	private migrateLegacySettings(data: StoredSettings | null) {
 		if (!data) return;
-		const legacy = this.settings as any;
+		const legacy = this.settings as UniverseBuilderSettings & LegacySettings;
 		if (!data.collapsedGroups && data.collapsedEmployers) this.settings.collapsedGroups = data.collapsedEmployers;
 		if (!data.collapsedGroupTypes && data.collapsedEmployerTypes) this.settings.collapsedGroupTypes = data.collapsedEmployerTypes;
 		delete legacy.collapsedEmployers;
 		delete legacy.collapsedEmployerTypes;
-		const order = this.settings.sectionOrder as any;
+		const order = this.settings.sectionOrder as UniverseBuilderSettings["sectionOrder"] & { employers?: string[] };
 		if (order.employers && !order.groups) order.groups = order.employers;
 		delete order.employers;
 		this.settings.collapsedBookmarkGroups = this.settings.collapsedBookmarkGroups.map((k) => (k === "employers" ? "groups" : k));
