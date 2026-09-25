@@ -52,23 +52,34 @@
 	flex-wrap: wrap;
 }
 
-.wb-tab {
+/* The tabs are <button>s, and Obsidian's `button:not(.clickable-icon)` rule (specificity 0,1,1)
+   gives them a filled background, an --input-shadow and a fixed height. A plain `.wb-tab` selector
+   loses to that, so these rules go through `.wb-tabs .wb-tab` (0,2,0) and reset every piece of it. */
+.wb-tabs .wb-tab {
 	padding: 6px 10px;
+	height: auto;
 	font-size: 0.82em;
 	cursor: pointer;
 	color: var(--text-muted);
-	border-bottom: 2px solid transparent;
 	background: none;
-	border-top: none;
-	border-left: none;
-	border-right: none;
+	box-shadow: none;
+	border: none;
+	border-bottom: 2px solid transparent;
+	border-radius: 0;
 	white-space: nowrap;
 }
-.wb-tab.active {
+.wb-tabs .wb-tab.active {
 	color: var(--text-accent);
 	border-bottom-color: var(--interactive-accent);
 }
-.wb-tab:hover { color: var(--text-normal); }
+.wb-tabs .wb-tab:hover,
+.wb-tabs .wb-tab:focus,
+.wb-tabs .wb-tab:active {
+	background: none;
+	box-shadow: none;
+}
+.wb-tabs .wb-tab:hover { color: var(--text-normal); }
+.wb-tabs .wb-tab.active:hover { color: var(--text-accent); }
 
 .wb-tab-content { display: none; }
 .wb-tab-content.active { display: block; }
