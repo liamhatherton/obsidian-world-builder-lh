@@ -2,7 +2,7 @@
 
 A fiction world-building toolkit for Obsidian: characters, locations, groups, lore entries, and timeline events.  This plugin is a fork of World Builder originally authored by wesswart77.  It has been adapted to work well outside of a fantasy setting and instead puts an emphasis on sci-fi.
 
-![Screenshot](worldbuilder.jpg)
+![Screenshot](universe-builder.jpg)
 
 ## Features
 
