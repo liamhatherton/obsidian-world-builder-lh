@@ -1,6 +1,6 @@
 {
   "name": "universe-builder",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
