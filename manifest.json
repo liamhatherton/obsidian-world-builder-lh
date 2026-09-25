@@ -1,7 +1,7 @@
 {
   "id": "universe-builder",
   "name": "Universe Builder",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "minAppVersion": "1.13.0",
   "description": "A fiction world building sidebar-contained wiki for characters, locations, groups, lore entries, and timeline events. (Originally authored by wesswart77).",
   "author": "liamhatherton",
