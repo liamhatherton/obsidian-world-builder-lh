@@ -6,6 +6,7 @@ import {
 	Notice,
 	Component,
 	Editor,
+	FileSystemAdapter,
 	Plugin,
 	PluginSettingTab,
 	Scope,
@@ -103,6 +104,27 @@ function isShip(fm: Record<string, string>): boolean {
 
 /** Extensions treated as "graphics" when filtering images out of note text. */
 const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
+
+/** An Obsidian image size spec, as in `![[image.png|300]]` or `![[image.png|300x200]]`. */
+const SIZE_SPEC = /^\d+(x\d+)?$/;
+
+/** The image embed that supplies a card's portrait (see findFirstImage). */
+interface PortraitMatch {
+	/** Displayable URL for the image. */
+	src: string;
+	/** Where the whole embed (`![[...]]` / `![...](...)`) sits in the note's text. */
+	start: number;
+	end: number;
+	/** The image file in the vault, or null for a web (http) image. */
+	file: TFile | null;
+	/** File name, for messages. */
+	name: string;
+	/** Size spec carried over when the image is replaced ("" if none). */
+	size: string;
+}
+
+/** An image dragged onto a card: a file already in the vault, or one from outside it (e.g. File Explorer). */
+type DroppedImage = { kind: "vault"; file: TFile } | { kind: "external"; file: File };
 
 /** Strips a leading YAML frontmatter block, if present, from note content. */
 function stripFrontmatterBlock(content: string): string {
@@ -861,19 +883,37 @@ class UniverseBuilderView extends ItemView {
 
 	/** Returns a displayable URL for the first image embedded in a note, or null. */
 	findFirstImageSrc(content: string, file: TFile): string | null {
-		const re = /!\[\[([^\]]+)\]\]|!\[[^\]]*\]\((<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\)/g;
+		return this.findFirstImage(content, file)?.src ?? null;
+	}
+
+	/**
+	 * Finds the first image embedded in a note (the one shown as the card's portrait): its
+	 * displayable URL plus where its embed sits in `content`, so it can be swapped for another.
+	 * `size` is an Obsidian size spec on the embed ("300" or "300x200"), if it had one.
+	 */
+	findFirstImage(content: string, file: TFile): PortraitMatch | null {
+		const re = /!\[\[([^\]]+)\]\]|!\[([^\]]*)\]\((<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\)/g;
 		let m: RegExpExecArray | null;
 		while ((m = re.exec(content)) !== null) {
+			const start = m.index;
+			const end = m.index + m[0].length;
 			let target: string;
+			let size = "";
 			if (m[1] !== undefined) {
 				// Wiki embed: ![[image.png|300]]
-				target = m[1].split("|")[0].split("#")[0].trim();
+				const parts = m[1].split("|");
+				target = parts[0].split("#")[0].trim();
+				size = (parts[1] ?? "").trim();
 			} else {
-				// Markdown embed: ![alt](path/to/image.png)
-				target = (m[2] ?? "").trim();
+				// Markdown embed: ![alt](path/to/image.png) or ![alt|300](...)
+				size = (m[2] ?? "").split("|").pop()!.trim();
+				target = (m[3] ?? "").trim();
 				if (target.startsWith("<") && target.endsWith(">")) target = target.slice(1, -1);
 				if (/^https?:\/\//i.test(target)) {
-					if (IMG_EXT.test(target.split(/[?#]/)[0])) return target;
+					const bare = target.split(/[?#]/)[0];
+					if (IMG_EXT.test(bare)) {
+						return { src: target, start, end, file: null, name: bare.split("/").pop() || target, size: SIZE_SPEC.test(size) ? size : "" };
+					}
 					continue;
 				}
 				try { target = decodeURIComponent(target); } catch { /* keep as-is */ }
@@ -883,7 +923,9 @@ class UniverseBuilderView extends ItemView {
 			const dest =
 				this.app.metadataCache.getFirstLinkpathDest(target, file.path) ??
 				this.app.vault.getAbstractFileByPath(target);
-			if (dest instanceof TFile) return this.app.vault.getResourcePath(dest);
+			if (dest instanceof TFile) {
+				return { src: this.app.vault.getResourcePath(dest), start, end, file: dest, name: dest.name, size: SIZE_SPEC.test(size) ? size : "" };
+			}
 		}
 		return null;
 	}
@@ -1439,6 +1481,8 @@ class UniverseBuilderView extends ItemView {
 				});
 			}
 			body = row.createDiv("wb-card-body");
+			// Characters, Locations and Groups (the tabs with portraits): drop an image on the card to set it.
+			this.enableImageDrop(card, entry, title);
 		}
 		const titleEl = body.createDiv("wb-card-title");
 		titleEl.createSpan({ text: title });
@@ -2030,6 +2074,171 @@ class UniverseBuilderView extends ItemView {
 		}
 
 		card.scrollIntoView({ block: "center", behavior: "smooth" });
+	}
+
+	/**
+	 * Lets an image file be dropped onto a portrait card (collapsed or expanded) to set its
+	 * portrait, from outside Obsidian (e.g. File Explorer) or from Obsidian's own file list. The
+	 * card is outlined while an image is over it. Drops meant for an open inline editor are left
+	 * to the editor, and card reorder drags (which carry application/x-wb-card) are ignored.
+	 */
+	private enableImageDrop(card: HTMLElement, entry: NoteEntry, title: string) {
+		const isImageDrag = (e: DragEvent): boolean => {
+			const dt = e.dataTransfer;
+			if (!dt || dt.types.includes("application/x-wb-card")) return false;
+			if (dt.types.includes("Files")) {
+				// While dragging, only each item's MIME type is visible (not its name); some image
+				// types have none, so an untyped file is let through and checked by name on drop.
+				const items = Array.from(dt.items ?? []);
+				return items.length === 0 || items.some((i) => i.kind === "file" && (i.type === "" || i.type.startsWith("image/")));
+			}
+			return this.draggedVaultImage() !== null;
+		};
+		// Over the open inline editor: let the editor take the drop as it normally would.
+		const overEditor = (e: DragEvent) =>
+			this.activeEdit?.card === card &&
+			e.target instanceof Node &&
+			!!card.querySelector(":scope > .wb-card-expand")?.contains(e.target);
+		const clear = () => card.removeClass("wb-card-image-drop");
+
+		card.addEventListener("dragenter", (e) => {
+			if (!isImageDrag(e) || overEditor(e)) return;
+			e.preventDefault();
+			card.addClass("wb-card-image-drop");
+		});
+		card.addEventListener("dragover", (e) => {
+			if (!isImageDrag(e)) return;
+			if (overEditor(e)) { clear(); return; }
+			e.preventDefault();
+			e.stopPropagation();
+			if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+			card.addClass("wb-card-image-drop");
+		});
+		card.addEventListener("dragleave", (e) => {
+			if (!card.contains(e.relatedTarget as Node | null)) clear();
+		});
+		card.addEventListener("drop", (e) => {
+			clear();
+			if (!isImageDrag(e) || overEditor(e)) return;
+			e.preventDefault();
+			e.stopPropagation();
+			const dt = e.dataTransfer!;
+			// Read what was dropped now: the DataTransfer is emptied once this handler returns.
+			let image: DroppedImage | null = null;
+			if (dt.types.includes("Files")) {
+				const files = Array.from(dt.files);
+				const picked = files.find((f) => IMG_EXT.test(f.name));
+				if (!picked) {
+					new Notice(files.length === 1 ? `"${files[0].name}" isn't an image.` : "None of those files is an image.");
+					return;
+				}
+				const inVault = this.vaultFileForDropped(picked);
+				image = inVault ? { kind: "vault", file: inVault } : { kind: "external", file: picked };
+			} else {
+				const vaultFile = this.draggedVaultImage();
+				if (vaultFile) image = { kind: "vault", file: vaultFile };
+			}
+			if (!image) return;
+			if (this.activeEdit) {
+				// Saving the portrait redraws the sidebar, which would close the open editor.
+				new Notice("Finish editing the open entry before dropping an image.");
+				return;
+			}
+			void this.setPortrait(entry.file, title, image);
+		});
+	}
+
+	/**
+	 * The image file being dragged from inside Obsidian (its file list, etc.), or null. Uses
+	 * Obsidian's drag manager, which isn't part of the public API, so it's read defensively.
+	 */
+	private draggedVaultImage(): TFile | null {
+		const draggable = (this.app as unknown as { dragManager?: { draggable?: { type?: string; file?: unknown; files?: unknown[] } | null } })
+			.dragManager?.draggable;
+		if (!draggable) return null;
+		const candidates = draggable.type === "file" ? [draggable.file] : draggable.type === "files" ? draggable.files ?? [] : [];
+		for (const f of candidates) if (f instanceof TFile && IMG_EXT.test(f.name)) return f;
+		return null;
+	}
+
+	/**
+	 * If a file dropped from outside Obsidian actually lives inside this vault, returns it, so it's
+	 * linked where it is instead of being copied in a second time. Desktop only; null otherwise.
+	 */
+	private vaultFileForDropped(dropped: File): TFile | null {
+		const adapter = this.app.vault.adapter;
+		if (!(adapter instanceof FileSystemAdapter)) return null;
+		let osPath = "";
+		try {
+			// Newer Electron dropped File.path in favour of webUtils.getPathForFile().
+			const electron = (window as unknown as { require?: (m: string) => { webUtils?: { getPathForFile?: (f: File) => string } } })
+				.require?.("electron");
+			osPath = electron?.webUtils?.getPathForFile?.(dropped) || (dropped as File & { path?: string }).path || "";
+		} catch {
+			osPath = (dropped as File & { path?: string }).path ?? "";
+		}
+		if (!osPath) return null;
+		const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+		const base = norm(adapter.getBasePath());
+		const full = norm(osPath);
+		if (!full.toLowerCase().startsWith(base.toLowerCase() + "/")) return null;
+		const found = this.app.vault.getAbstractFileByPath(normalizePath(full.slice(base.length + 1)));
+		return found instanceof TFile ? found : null;
+	}
+
+	/**
+	 * Sets a note's portrait to a dropped image. If the note already embeds a portrait image, asks
+	 * before replacing it (declining changes nothing, and nothing is copied into the vault), then
+	 * swaps that embed for the new one in place, keeping any size spec. Otherwise the embed is
+	 * added at the very top of the note's body (right after the frontmatter, which has to stay first).
+	 * An image from outside the vault is copied into the attachment folder from Obsidian's settings,
+	 * the same as dragging it into the editor does.
+	 */
+	private async setPortrait(note: TFile, title: string, image: DroppedImage) {
+		try {
+			const existing = this.findFirstImage(await this.app.vault.read(note), note);
+			if (existing) {
+				if (image.kind === "vault" && existing.file?.path === image.file.path) {
+					new Notice(`"${image.file.name}" is already the portrait for "${title}".`);
+					return;
+				}
+				const ok = await confirmModal(
+					this.app,
+					"Replace portrait?",
+					`"${title}" already has a portrait (${existing.name}). Replace it with ${image.file.name}?`,
+					"Replace"
+				);
+				if (!ok) return;
+			}
+
+			let imageFile: TFile;
+			if (image.kind === "vault") {
+				imageFile = image.file;
+			} else {
+				const dest = await this.app.fileManager.getAvailablePathForAttachment(image.file.name, note.path);
+				imageFile = await this.app.vault.createBinary(dest, await image.file.arrayBuffer());
+			}
+			const embedFor = (size: string) => {
+				// Follows the user's link settings (wiki vs markdown links, relative paths, ...).
+				const link = this.app.fileManager.generateMarkdownLink(imageFile, note.path, undefined, size || undefined);
+				return link.startsWith("!") ? link : `!${link}`;
+			};
+
+			await this.app.vault.process(note, (data) => {
+				// Re-located in the current text, in case the note changed while the dialog was open.
+				const current = this.findFirstImage(data, note);
+				if (current) return data.slice(0, current.start) + embedFor(current.size) + data.slice(current.end);
+				const bodyStart = data.length - stripFrontmatterBlock(data).length;
+				let head = data.slice(0, bodyStart);
+				if (head && !head.endsWith("\n")) head += "\n";
+				return `${head}${embedFor("")}\n${data.slice(bodyStart)}`;
+			});
+			await this.render({ keepExpanded: true });
+			new Notice(`Portrait ${existing ? "replaced" : "added"} for "${title}".`);
+		} catch (err) {
+			console.error("Universe Builder: setting portrait failed", err);
+			new Notice(`Couldn't set the portrait for "${title}".`);
+		}
 	}
 
 	/**

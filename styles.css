@@ -289,14 +289,13 @@
  * - nothing needs to recalculate it. Deeper levels nest their own .wb-child-group further right, so
  * an ancestor's line runs the full height of everything under it while a deeper line only spans its
  * own smaller subtree, giving each level a visually distinct line (a "staircase", like a file tree).
- * A flat rgba() (not a theme CSS variable or color-mix()) on purpose: it's the one value every
- * Obsidian build/theme renders the same way, so there's nothing here that can silently fail to
- * apply. 1px + 0.45 alpha is a visible but still clearly translucent hint, not a hard rule.
+ * Color and width come from Obsidian's own indentation-guide variables (the same ones the file
+ * explorer uses), so the lines match the native tree guides and follow the active theme.
  */
 .wb-child-group {
 	margin-left: 8px;
 	padding-left: 11px;
-	border-left: 1px solid rgba(150, 150, 150, 0.45);
+	border-left: var(--nav-indentation-guide-width, 1px) solid var(--nav-indentation-guide-color);
 }
 
 .wb-list .wb-card[draggable="true"] { cursor: grab; }
@@ -304,6 +303,13 @@
 .wb-card.wb-dragging { opacity: 0.4; }
 .wb-list > .wb-drop-before { box-shadow: 0 -3px 0 0 var(--interactive-accent); }
 .wb-list > .wb-drop-after { box-shadow: 0 3px 0 0 var(--interactive-accent); }
+
+/* An image file dragged over a portrait card (Characters / Locations / Groups): dropping sets its portrait. */
+.wb-card.wb-card-image-drop {
+	border-color: var(--interactive-accent);
+	box-shadow: 0 0 0 2px var(--interactive-accent);
+	background: var(--background-modifier-hover);
+}
 
 /*
  * Hierarchical tabs (Locations): every parent gets a collapsible label (same look as the Groups

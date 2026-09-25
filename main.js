@@ -59,6 +59,7 @@ function isShip(fm) {
   return ((_a = fm.type) != null ? _a : "").trim().toLowerCase() === "ship";
 }
 var IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
+var SIZE_SPEC = /^\d+(x\d+)?$/;
 function stripFrontmatterBlock(content) {
   return content.replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "");
 }
@@ -686,17 +687,35 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
   /** Returns a displayable URL for the first image embedded in a note, or null. */
   findFirstImageSrc(content, file) {
     var _a, _b;
-    const re = /!\[\[([^\]]+)\]\]|!\[[^\]]*\]\((<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\)/g;
+    return (_b = (_a = this.findFirstImage(content, file)) == null ? void 0 : _a.src) != null ? _b : null;
+  }
+  /**
+   * Finds the first image embedded in a note (the one shown as the card's portrait): its
+   * displayable URL plus where its embed sits in `content`, so it can be swapped for another.
+   * `size` is an Obsidian size spec on the embed ("300" or "300x200"), if it had one.
+   */
+  findFirstImage(content, file) {
+    var _a, _b, _c, _d;
+    const re = /!\[\[([^\]]+)\]\]|!\[([^\]]*)\]\((<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\)/g;
     let m;
     while ((m = re.exec(content)) !== null) {
+      const start = m.index;
+      const end = m.index + m[0].length;
       let target;
+      let size = "";
       if (m[1] !== void 0) {
-        target = m[1].split("|")[0].split("#")[0].trim();
+        const parts = m[1].split("|");
+        target = parts[0].split("#")[0].trim();
+        size = ((_a = parts[1]) != null ? _a : "").trim();
       } else {
-        target = ((_a = m[2]) != null ? _a : "").trim();
+        size = ((_b = m[2]) != null ? _b : "").split("|").pop().trim();
+        target = ((_c = m[3]) != null ? _c : "").trim();
         if (target.startsWith("<") && target.endsWith(">")) target = target.slice(1, -1);
         if (/^https?:\/\//i.test(target)) {
-          if (IMG_EXT.test(target.split(/[?#]/)[0])) return target;
+          const bare = target.split(/[?#]/)[0];
+          if (IMG_EXT.test(bare)) {
+            return { src: target, start, end, file: null, name: bare.split("/").pop() || target, size: SIZE_SPEC.test(size) ? size : "" };
+          }
           continue;
         }
         try {
@@ -706,8 +725,10 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
         target = target.split("#")[0];
       }
       if (!IMG_EXT.test(target)) continue;
-      const dest = (_b = this.app.metadataCache.getFirstLinkpathDest(target, file.path)) != null ? _b : this.app.vault.getAbstractFileByPath(target);
-      if (dest instanceof import_obsidian.TFile) return this.app.vault.getResourcePath(dest);
+      const dest = (_d = this.app.metadataCache.getFirstLinkpathDest(target, file.path)) != null ? _d : this.app.vault.getAbstractFileByPath(target);
+      if (dest instanceof import_obsidian.TFile) {
+        return { src: this.app.vault.getResourcePath(dest), start, end, file: dest, name: dest.name, size: SIZE_SPEC.test(size) ? size : "" };
+      }
     }
     return null;
   }
@@ -1162,6 +1183,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
         });
       }
       body = row.createDiv("wb-card-body");
+      this.enableImageDrop(card, entry, title);
     }
     const titleEl = body.createDiv("wb-card-title");
     titleEl.createSpan({ text: title });
@@ -1678,6 +1700,162 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       if (entry) this.toggleCardExpand(tab, card, entry);
     }
     card.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+  /**
+   * Lets an image file be dropped onto a portrait card (collapsed or expanded) to set its
+   * portrait, from outside Obsidian (e.g. File Explorer) or from Obsidian's own file list. The
+   * card is outlined while an image is over it. Drops meant for an open inline editor are left
+   * to the editor, and card reorder drags (which carry application/x-wb-card) are ignored.
+   */
+  enableImageDrop(card, entry, title) {
+    const isImageDrag = (e) => {
+      var _a;
+      const dt = e.dataTransfer;
+      if (!dt || dt.types.includes("application/x-wb-card")) return false;
+      if (dt.types.includes("Files")) {
+        const items = Array.from((_a = dt.items) != null ? _a : []);
+        return items.length === 0 || items.some((i) => i.kind === "file" && (i.type === "" || i.type.startsWith("image/")));
+      }
+      return this.draggedVaultImage() !== null;
+    };
+    const overEditor = (e) => {
+      var _a, _b;
+      return ((_a = this.activeEdit) == null ? void 0 : _a.card) === card && e.target instanceof Node && !!((_b = card.querySelector(":scope > .wb-card-expand")) == null ? void 0 : _b.contains(e.target));
+    };
+    const clear = () => card.removeClass("wb-card-image-drop");
+    card.addEventListener("dragenter", (e) => {
+      if (!isImageDrag(e) || overEditor(e)) return;
+      e.preventDefault();
+      card.addClass("wb-card-image-drop");
+    });
+    card.addEventListener("dragover", (e) => {
+      if (!isImageDrag(e)) return;
+      if (overEditor(e)) {
+        clear();
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+      card.addClass("wb-card-image-drop");
+    });
+    card.addEventListener("dragleave", (e) => {
+      if (!card.contains(e.relatedTarget)) clear();
+    });
+    card.addEventListener("drop", (e) => {
+      clear();
+      if (!isImageDrag(e) || overEditor(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const dt = e.dataTransfer;
+      let image = null;
+      if (dt.types.includes("Files")) {
+        const files = Array.from(dt.files);
+        const picked = files.find((f) => IMG_EXT.test(f.name));
+        if (!picked) {
+          new import_obsidian.Notice(files.length === 1 ? `"${files[0].name}" isn't an image.` : "None of those files is an image.");
+          return;
+        }
+        const inVault = this.vaultFileForDropped(picked);
+        image = inVault ? { kind: "vault", file: inVault } : { kind: "external", file: picked };
+      } else {
+        const vaultFile = this.draggedVaultImage();
+        if (vaultFile) image = { kind: "vault", file: vaultFile };
+      }
+      if (!image) return;
+      if (this.activeEdit) {
+        new import_obsidian.Notice("Finish editing the open entry before dropping an image.");
+        return;
+      }
+      void this.setPortrait(entry.file, title, image);
+    });
+  }
+  /**
+   * The image file being dragged from inside Obsidian (its file list, etc.), or null. Uses
+   * Obsidian's drag manager, which isn't part of the public API, so it's read defensively.
+   */
+  draggedVaultImage() {
+    var _a, _b;
+    const draggable = (_a = this.app.dragManager) == null ? void 0 : _a.draggable;
+    if (!draggable) return null;
+    const candidates = draggable.type === "file" ? [draggable.file] : draggable.type === "files" ? (_b = draggable.files) != null ? _b : [] : [];
+    for (const f of candidates) if (f instanceof import_obsidian.TFile && IMG_EXT.test(f.name)) return f;
+    return null;
+  }
+  /**
+   * If a file dropped from outside Obsidian actually lives inside this vault, returns it, so it's
+   * linked where it is instead of being copied in a second time. Desktop only; null otherwise.
+   */
+  vaultFileForDropped(dropped) {
+    var _a, _b, _c, _d;
+    const adapter = this.app.vault.adapter;
+    if (!(adapter instanceof import_obsidian.FileSystemAdapter)) return null;
+    let osPath = "";
+    try {
+      const electron = (_a = window.require) == null ? void 0 : _a.call(window, "electron");
+      osPath = ((_c = (_b = electron == null ? void 0 : electron.webUtils) == null ? void 0 : _b.getPathForFile) == null ? void 0 : _c.call(_b, dropped)) || dropped.path || "";
+    } catch (e) {
+      osPath = (_d = dropped.path) != null ? _d : "";
+    }
+    if (!osPath) return null;
+    const norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+    const base = norm(adapter.getBasePath());
+    const full = norm(osPath);
+    if (!full.toLowerCase().startsWith(base.toLowerCase() + "/")) return null;
+    const found = this.app.vault.getAbstractFileByPath((0, import_obsidian.normalizePath)(full.slice(base.length + 1)));
+    return found instanceof import_obsidian.TFile ? found : null;
+  }
+  /**
+   * Sets a note's portrait to a dropped image. If the note already embeds a portrait image, asks
+   * before replacing it (declining changes nothing, and nothing is copied into the vault), then
+   * swaps that embed for the new one in place, keeping any size spec. Otherwise the embed is
+   * added at the very top of the note's body (right after the frontmatter, which has to stay first).
+   * An image from outside the vault is copied into the attachment folder from Obsidian's settings,
+   * the same as dragging it into the editor does.
+   */
+  async setPortrait(note, title, image) {
+    var _a;
+    try {
+      const existing = this.findFirstImage(await this.app.vault.read(note), note);
+      if (existing) {
+        if (image.kind === "vault" && ((_a = existing.file) == null ? void 0 : _a.path) === image.file.path) {
+          new import_obsidian.Notice(`"${image.file.name}" is already the portrait for "${title}".`);
+          return;
+        }
+        const ok = await confirmModal(
+          this.app,
+          "Replace portrait?",
+          `"${title}" already has a portrait (${existing.name}). Replace it with ${image.file.name}?`,
+          "Replace"
+        );
+        if (!ok) return;
+      }
+      let imageFile;
+      if (image.kind === "vault") {
+        imageFile = image.file;
+      } else {
+        const dest = await this.app.fileManager.getAvailablePathForAttachment(image.file.name, note.path);
+        imageFile = await this.app.vault.createBinary(dest, await image.file.arrayBuffer());
+      }
+      const embedFor = (size) => {
+        const link = this.app.fileManager.generateMarkdownLink(imageFile, note.path, void 0, size || void 0);
+        return link.startsWith("!") ? link : `!${link}`;
+      };
+      await this.app.vault.process(note, (data) => {
+        const current = this.findFirstImage(data, note);
+        if (current) return data.slice(0, current.start) + embedFor(current.size) + data.slice(current.end);
+        const bodyStart = data.length - stripFrontmatterBlock(data).length;
+        let head = data.slice(0, bodyStart);
+        if (head && !head.endsWith("\n")) head += "\n";
+        return `${head}${embedFor("")}
+${data.slice(bodyStart)}`;
+      });
+      await this.render({ keepExpanded: true });
+      new import_obsidian.Notice(`Portrait ${existing ? "replaced" : "added"} for "${title}".`);
+    } catch (err) {
+      console.error("Universe Builder: setting portrait failed", err);
+      new import_obsidian.Notice(`Couldn't set the portrait for "${title}".`);
+    }
   }
   /**
    * Makes the cards in one list drag-sortable (an group's character group, a hierarchical
