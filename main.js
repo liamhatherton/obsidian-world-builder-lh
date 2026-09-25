@@ -19,7 +19,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // src/main.ts
 var main_exports = {};
 __export(main_exports, {
-  default: () => WorldBuilderPlugin
+  default: () => UniverseBuilderPlugin
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
@@ -256,8 +256,8 @@ function mergeGroupOrder(overall, groupPaths, newGroupOrder) {
   if (!inserted) result.push(...newGroupOrder);
   return result;
 }
-var VIEW_TYPE = "world-builder-sidebar";
-var WorldBuilderView = class extends import_obsidian.ItemView {
+var VIEW_TYPE = "universe-builder-sidebar";
+var UniverseBuilderView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.activeTab = "characters";
@@ -314,7 +314,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     return VIEW_TYPE;
   }
   getDisplayText() {
-    return "World Builder";
+    return "Universe Builder";
   }
   getIcon() {
     return "orbit";
@@ -355,7 +355,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
     const fixed = containerEl.createDiv("wb-fixed");
     const scroll = containerEl.createDiv("wb-scroll");
     const header = fixed.createDiv("wb-header");
-    header.createEl("h2", { text: "Hatherton's World Builder" });
+    header.createEl("h2", { text: "Universe Builder" });
     const bookmarksBtn = header.createEl("button", {
       cls: "wb-btn-secondary wb-icon-btn wb-bookmarks-btn",
       attr: { type: "button", "aria-label": "Bookmarks" }
@@ -886,7 +886,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
       reloadBtn.createEl("span", { text: "Reload" });
       reloadBtn.onclick = async () => {
         await this.render();
-        new import_obsidian.Notice("World Builder reloaded.");
+        new import_obsidian.Notice("Universe Builder reloaded.");
       };
     }
     if (onCreate) {
@@ -1360,7 +1360,7 @@ var WorldBuilderView = class extends import_obsidian.ItemView {
         await this.render({ keepExpanded: true });
         new import_obsidian.Notice(`Saved "${entry.file.basename}".`);
       } catch (err) {
-        console.error("World Builder: save failed", err);
+        console.error("Universe Builder: save failed", err);
         new import_obsidian.Notice(`Couldn't save "${entry.file.basename}".`);
       }
     };
@@ -1826,7 +1826,7 @@ function resolveLivePreviewEditorClass(app) {
       if (typeof ctor === "function") livePreviewEditorClass = ctor;
     }
   } catch (err) {
-    console.warn("World Builder: Live Preview editor unavailable (Obsidian internals changed?); using the raw markdown editor.", err);
+    console.warn("Universe Builder: Live Preview editor unavailable (Obsidian internals changed?); using the raw markdown editor.", err);
   }
   return livePreviewEditorClass;
 }
@@ -1899,7 +1899,7 @@ function createLivePreviewEditor(app, parent, anchor, file, text, keys) {
     cmp.set(bodyText);
     initialBody = getBodyValue();
   } catch (err) {
-    console.warn("World Builder: couldn't create the Live Preview editor; using the raw markdown editor.", err);
+    console.warn("Universe Builder: couldn't create the Live Preview editor; using the raw markdown editor.", err);
     try {
       if (cmp) parent.removeChild(cmp);
     } catch (e) {
@@ -2413,7 +2413,7 @@ var TimelineModal = class extends import_obsidian.Modal {
     this.contentEl.empty();
   }
 };
-var WorldBuilderSettingTab = class extends import_obsidian.PluginSettingTab {
+var UniverseBuilderSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -2469,14 +2469,14 @@ var WorldBuilderSettingTab = class extends import_obsidian.PluginSettingTab {
     await this.plugin.saveSettings();
   }
 };
-var WorldBuilderPlugin = class extends import_obsidian.Plugin {
+var UniverseBuilderPlugin = class extends import_obsidian.Plugin {
   async onload() {
     await this.loadSettings();
-    this.registerView(VIEW_TYPE, (leaf) => new WorldBuilderView(leaf, this));
-    this.addRibbonIcon("orbit", "World Builder", () => this.activateSidebar());
+    this.registerView(VIEW_TYPE, (leaf) => new UniverseBuilderView(leaf, this));
+    this.addRibbonIcon("orbit", "Universe Builder", () => this.activateSidebar());
     this.addCommand({
       id: "open-sidebar",
-      name: "Open World Builder sidebar",
+      name: "Open Universe Builder sidebar",
       callback: () => this.activateSidebar()
     });
     this.addCommand({
@@ -2542,7 +2542,7 @@ var WorldBuilderPlugin = class extends import_obsidian.Plugin {
         await this.saveSettings();
       })
     );
-    this.addSettingTab(new WorldBuilderSettingTab(this.app, this));
+    this.addSettingTab(new UniverseBuilderSettingTab(this.app, this));
   }
   async activateSidebar() {
     var _a;
@@ -2556,7 +2556,7 @@ var WorldBuilderPlugin = class extends import_obsidian.Plugin {
   }
   refreshSidebar() {
     const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
-    if ((leaf == null ? void 0 : leaf.view) instanceof WorldBuilderView) {
+    if ((leaf == null ? void 0 : leaf.view) instanceof UniverseBuilderView) {
       leaf.view.render();
     }
   }

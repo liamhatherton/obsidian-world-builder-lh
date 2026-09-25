@@ -1,4 +1,4 @@
-# Hatherton's World Builder
+# Universe Builder
 
 A fiction world-building toolkit for Obsidian: characters, locations, groups, lore entries, and timeline events.  This plugin is a fork of World Builder originally authored by wesswart77.  It has been adapted to work well outside of a fantasy setting and instead puts an emphasis on sci-fi.
 
@@ -65,10 +65,6 @@ Everything below was added or changed in this fork (by liamhatherton), compiled 
 26. **Double-click to collapse a section.** Double-clicking the tab you're already on (Characters, Locations, Groups, Lore or Timeline) closes every expanded card and folds every collapsible group in that section. The folded state is saved like a manual fold.
 27. **Inline editing in the sidebar.** An expanded entry's footer has Modify MD (opens the note in the main editor) and Edit. Edit replaces the preview with Obsidian's own Live Preview editor for the note's text (formatting shown as you type, `[[link]]` suggestions, editor hotkeys such as bold), with the note's properties in a small raw YAML **Properties** box above it. The buttons become Cancel and Save. Nothing is written to the file until you Save, which updates the note and returns to the preview, with the card's name, badges and grouping updated. Cancel discards the changes (asking first if anything changed). Only one entry is edited at a time: clicking Edit on another card saves the open one first. Ctrl/Cmd+S or Ctrl/Cmd+Enter also save, Esc cancels, and collapsing a card with unsaved edits asks first. If the note was changed elsewhere while you were editing, saving asks before overwriting it. The Live Preview editor relies on an undocumented Obsidian API (see [Undocumented Obsidian API](#undocumented-obsidian-api)); the **Sidebar editor** setting switches to a plain raw-markdown text box instead.
 
-### Branding
-
-28. **Rebranded as "Hatherton's World Builder"** with a new plugin ID (`world-builder-lh`), author, description and package name, and an orbit icon for the ribbon and sidebar instead of the globe. Credit to the original author, wesswart77, is kept.
-
 ## Undocumented Obsidian API
 
 Obsidian's public plugin API has no supported way to put its Live Preview editor inside a custom view. The sidebar's inline **Edit** (Live Preview mode) gets one anyway through Obsidian internals. This is the only place the plugin uses undocumented API; everything else uses the public API.
@@ -86,12 +82,12 @@ This is the same technique the [Kanban plugin](https://github.com/mgmeyers/obsid
 
 ### If an Obsidian update breaks it
 
-1. **Automatic fallback.** If the internal editor can't be created (the embed registry or editor class is missing, or construction throws), the plugin logs a warning to the developer console (`World Builder: Live Preview editor unavailable ...`) and opens the raw markdown text box instead. Editing keeps working, just without formatting.
-2. **Switch it off by hand.** If the editor still appears but misbehaves (wrong layout, keys not working, text not saving correctly), go to **Settings → Hatherton's World Builder → Sidebar editor** and choose **Raw markdown**.
+1. **Automatic fallback.** If the internal editor can't be created (the embed registry or editor class is missing, or construction throws), the plugin logs a warning to the developer console (`Universe Builder: Live Preview editor unavailable ...`) and opens the raw markdown text box instead. Editing keeps working, just without formatting.
+2. **Switch it off by hand.** If the editor still appears but misbehaves (wrong layout, keys not working, text not saving correctly), go to **Settings → Universe Builder → Sidebar editor** and choose **Raw markdown**.
 3. **Remove it from the code entirely.** To revert to the raw-markdown editor permanently:
    - In `startEditing()` (inside `toggleCardExpand()`), replace the `editor = (... createLivePreviewEditor(...) ...) ?? createRawEditor(...)` assignment with `editor = createRawEditor(body, entry.file, original, keys);`.
    - Delete the `⚠ UNDOCUMENTED OBSIDIAN API ⚠` block: `LivePreviewEditorClass`, `livePreviewEditorClass`, `resolveLivePreviewEditorClass()` and `createLivePreviewEditor()`. Keep `splitFrontmatter()` only if something else still uses it.
-   - Optionally remove the `inlineEditor` setting (its field in `WorldBuilderSettings`, its default in `DEFAULT_SETTINGS`, the line in `loadSettings()`, and the "Sidebar editor" entry in `WorldBuilderSettingTab.getSettingDefinitions()` / `setControlValue()`) and the `.wb-card-editor-body` / `.wb-card-editor-props` / `.wb-card-editor-label` rules in `styles.css`.
+   - Optionally remove the `inlineEditor` setting (its field in `UniverseBuilderSettings`, its default in `DEFAULT_SETTINGS`, the line in `loadSettings()`, and the "Sidebar editor" entry in `UniverseBuilderSettingTab.getSettingDefinitions()` / `setControlValue()`) and the `.wb-card-editor-body` / `.wb-card-editor-props` / `.wb-card-editor-label` rules in `styles.css`.
    - Remove the `Scope` and `Component` imports if nothing else uses them.
 
 ### The raw-markdown alternative

@@ -17,7 +17,7 @@ import type { SettingDefinitionItem } from "obsidian";
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
-interface WorldBuilderSettings {
+interface UniverseBuilderSettings {
 	worldFolder: string;
 	/** Custom character order, keyed by lower-cased group name -> ordered note paths. */
 	characterOrder: Record<string, string[]>;
@@ -41,7 +41,7 @@ interface WorldBuilderSettings {
 	 */
 	inlineEditor: "live" | "raw";
 }
-const DEFAULT_SETTINGS: WorldBuilderSettings = {
+const DEFAULT_SETTINGS: UniverseBuilderSettings = {
 	worldFolder: "World",
 	characterOrder: {},
 	collapsedGroups: [],
@@ -393,10 +393,10 @@ function mergeGroupOrder(overall: string[], groupPaths: string[], newGroupOrder:
 
 // ─── Sidebar View ─────────────────────────────────────────────────────────────
 
-const VIEW_TYPE = "world-builder-sidebar";
+const VIEW_TYPE = "universe-builder-sidebar";
 
-class WorldBuilderView extends ItemView {
-	plugin: WorldBuilderPlugin;
+class UniverseBuilderView extends ItemView {
+	plugin: UniverseBuilderPlugin;
 	activeTab: WBTab = "characters";
 	/** What is typed in the search bar for each tab; kept here so it survives a redraw (Reload, new note, ...). */
 	searchQueries: Record<WBTab, string> = { characters: "", locations: "", groups: "", lore: "", timeline: "", bookmarks: "" };
@@ -454,13 +454,13 @@ class WorldBuilderView extends ItemView {
 	private restoringNav = false;
 	private navButtons: { back: HTMLButtonElement; fwd: HTMLButtonElement }[] = [];
 
-	constructor(leaf: WorkspaceLeaf, plugin: WorldBuilderPlugin) {
+	constructor(leaf: WorkspaceLeaf, plugin: UniverseBuilderPlugin) {
 		super(leaf);
 		this.plugin = plugin;
 	}
 
 	getViewType() { return VIEW_TYPE; }
-	getDisplayText() { return "World Builder"; }
+	getDisplayText() { return "Universe Builder"; }
 	getIcon() { return "orbit"; }
 
 	async onOpen() { await this.render(); }
@@ -503,7 +503,7 @@ class WorldBuilderView extends ItemView {
 		const scroll = containerEl.createDiv("wb-scroll");
 
 		const header = fixed.createDiv("wb-header");
-		header.createEl("h2", { text: "Hatherton's World Builder" });
+		header.createEl("h2", { text: "Universe Builder" });
 		// Bookmarks: icon-only, anchored to the right of the title. Highlighted while the Bookmarks view is open.
 		const bookmarksBtn = header.createEl("button", {
 			cls: "wb-btn-secondary wb-icon-btn wb-bookmarks-btn",
@@ -1076,7 +1076,7 @@ class WorldBuilderView extends ItemView {
 			reloadBtn.createEl("span", { text: "Reload" });
 			reloadBtn.onclick = async () => {
 				await this.render();
-				new Notice("World Builder reloaded.");
+				new Notice("Universe Builder reloaded.");
 			};
 		}
 		if (onCreate) {
@@ -1657,7 +1657,7 @@ class WorldBuilderView extends ItemView {
 				await this.render({ keepExpanded: true });
 				new Notice(`Saved "${entry.file.basename}".`);
 			} catch (err) {
-				console.error("World Builder: save failed", err);
+				console.error("Universe Builder: save failed", err);
 				new Notice(`Couldn't save "${entry.file.basename}".`);
 			}
 		};
@@ -2221,7 +2221,7 @@ function resolveLivePreviewEditorClass(app: App): LivePreviewEditorClass | null 
 			if (typeof ctor === "function") livePreviewEditorClass = ctor as LivePreviewEditorClass;
 		}
 	} catch (err) {
-		console.warn("World Builder: Live Preview editor unavailable (Obsidian internals changed?); using the raw markdown editor.", err);
+		console.warn("Universe Builder: Live Preview editor unavailable (Obsidian internals changed?); using the raw markdown editor.", err);
 	}
 	return livePreviewEditorClass;
 }
@@ -2304,7 +2304,7 @@ function createLivePreviewEditor(
 		cmp.set(bodyText);
 		initialBody = getBodyValue(); // the editor may normalise line endings; compare against what it holds
 	} catch (err) {
-		console.warn("World Builder: couldn't create the Live Preview editor; using the raw markdown editor.", err);
+		console.warn("Universe Builder: couldn't create the Live Preview editor; using the raw markdown editor.", err);
 		try { if (cmp) parent.removeChild(cmp); } catch { /* ignore */ }
 		wrap.remove();
 		return null;
@@ -2383,14 +2383,14 @@ function confirmModal(app: App, title: string, message: string, actionLabel: str
 }
 
 class CharacterModal extends Modal {
-	plugin: WorldBuilderPlugin;
+	plugin: UniverseBuilderPlugin;
 	onDone: () => void;
 	data = {
 		name: "", role: "protagonist", age: "", group: "", ship: "", home: "",
 		physicalDesc: "", personality: "", goals: ""
 	};
 
-	constructor(app: App, plugin: WorldBuilderPlugin, onDone: () => void) {
+	constructor(app: App, plugin: UniverseBuilderPlugin, onDone: () => void) {
 		super(app);
 		this.plugin = plugin;
 		this.onDone = onDone;
@@ -2492,14 +2492,14 @@ class CharacterModal extends Modal {
 }
 
 class LocationModal extends Modal {
-	plugin: WorldBuilderPlugin;
+	plugin: UniverseBuilderPlugin;
 	onDone: () => void;
 	data = {
 		name: "", type: "planet", parent: "", description: "",
 		inhabitants: "", secrets: ""
 	};
 
-	constructor(app: App, plugin: WorldBuilderPlugin, onDone: () => void) {
+	constructor(app: App, plugin: UniverseBuilderPlugin, onDone: () => void) {
 		super(app);
 		this.plugin = plugin;
 		this.onDone = onDone;
@@ -2576,13 +2576,13 @@ class LocationModal extends Modal {
 }
 
 class GroupModal extends Modal {
-	plugin: WorldBuilderPlugin;
+	plugin: UniverseBuilderPlugin;
 	onDone: () => void;
 	data = {
 		name: "", type: "corporation", subsidiaryOf: "", alignment: "neutral", goals: "", enemies: "", allies: "", description: ""
 	};
 
-	constructor(app: App, plugin: WorldBuilderPlugin, onDone: () => void) {
+	constructor(app: App, plugin: UniverseBuilderPlugin, onDone: () => void) {
 		super(app);
 		this.plugin = plugin;
 		this.onDone = onDone;
@@ -2682,11 +2682,11 @@ class GroupModal extends Modal {
 }
 
 class LoreModal extends Modal {
-	plugin: WorldBuilderPlugin;
+	plugin: UniverseBuilderPlugin;
 	onDone: () => void;
 	data = { title: "", category: "history", content: "" };
 
-	constructor(app: App, plugin: WorldBuilderPlugin, onDone: () => void) {
+	constructor(app: App, plugin: UniverseBuilderPlugin, onDone: () => void) {
 		super(app);
 		this.plugin = plugin;
 		this.onDone = onDone;
@@ -2745,11 +2745,11 @@ class LoreModal extends Modal {
 }
 
 class TimelineModal extends Modal {
-	plugin: WorldBuilderPlugin;
+	plugin: UniverseBuilderPlugin;
 	onDone: () => void;
 	data = { date: "", title: "", description: "", characters: "", locations: "" };
 
-	constructor(app: App, plugin: WorldBuilderPlugin, onDone: () => void) {
+	constructor(app: App, plugin: UniverseBuilderPlugin, onDone: () => void) {
 		super(app);
 		this.plugin = plugin;
 		this.onDone = onDone;
@@ -2814,9 +2814,9 @@ class TimelineModal extends Modal {
 
 // ─── Settings Tab ─────────────────────────────────────────────────────────────
 
-class WorldBuilderSettingTab extends PluginSettingTab {
-	plugin: WorldBuilderPlugin;
-	constructor(app: App, plugin: WorldBuilderPlugin) {
+class UniverseBuilderSettingTab extends PluginSettingTab {
+	plugin: UniverseBuilderPlugin;
+	constructor(app: App, plugin: UniverseBuilderPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
@@ -2879,19 +2879,19 @@ class WorldBuilderSettingTab extends PluginSettingTab {
 
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 
-export default class WorldBuilderPlugin extends Plugin {
-	settings!: WorldBuilderSettings;
+export default class UniverseBuilderPlugin extends Plugin {
+	settings!: UniverseBuilderSettings;
 
 	async onload() {
 		await this.loadSettings();
 
-		this.registerView(VIEW_TYPE, (leaf) => new WorldBuilderView(leaf, this));
+		this.registerView(VIEW_TYPE, (leaf) => new UniverseBuilderView(leaf, this));
 
-		this.addRibbonIcon("orbit", "World Builder", () => this.activateSidebar());
+		this.addRibbonIcon("orbit", "Universe Builder", () => this.activateSidebar());
 
 		this.addCommand({
 			id: "open-sidebar",
-			name: "Open World Builder sidebar",
+			name: "Open Universe Builder sidebar",
 			callback: () => this.activateSidebar(),
 		});
 		this.addCommand({
@@ -2948,7 +2948,7 @@ export default class WorldBuilderPlugin extends Plugin {
 			})
 		);
 
-		this.addSettingTab(new WorldBuilderSettingTab(this.app, this));
+		this.addSettingTab(new UniverseBuilderSettingTab(this.app, this));
 	}
 
 	async activateSidebar() {
@@ -2963,8 +2963,8 @@ export default class WorldBuilderPlugin extends Plugin {
 
 	refreshSidebar() {
 		const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
-		if (leaf?.view instanceof WorldBuilderView) {
-			(leaf.view as WorldBuilderView).render();
+		if (leaf?.view instanceof UniverseBuilderView) {
+			(leaf.view as UniverseBuilderView).render();
 		}
 	}
 
