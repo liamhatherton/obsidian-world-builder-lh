@@ -32,8 +32,11 @@ function getMarkdownFilesIn(app, folderPath) {
   });
   return out;
 }
+var DEFAULT_FOLDER = "UniverseBuilder";
+var LEGACY_FOLDER = "World";
+var WORLD_BUILDER_ID = "world-builder";
 var DEFAULT_SETTINGS = {
-  worldFolder: "World",
+  worldFolder: DEFAULT_FOLDER,
   characterOrder: {},
   collapsedGroups: [],
   collapsedGroupTypes: [],
@@ -42,7 +45,8 @@ var DEFAULT_SETTINGS = {
   sectionOrder: {},
   bookmarks: [],
   collapsedBookmarkGroups: [],
-  inlineEditor: "live"
+  inlineEditor: "live",
+  folderMigration: {}
 };
 var GROUP_TYPES = [
   { key: "corporation", label: "Corporation" },
@@ -1436,7 +1440,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     (_a = this.updateShadowFn) == null ? void 0 : _a.call(this);
     if (folded) await this.plugin.saveSettings();
   }
-  /** The section folder a tab's notes live in, e.g. "World/Characters". */
+  /** The section folder a tab's notes live in, e.g. "UniverseBuilder/Characters". */
   tabFolder(tab) {
     return `${this.plugin.settings.worldFolder}/${SECTION_LABELS[tab]}`;
   }
@@ -2608,6 +2612,90 @@ var TimelineModal = class extends import_obsidian.Modal {
     this.contentEl.empty();
   }
 };
+var FolderMigrationModal = class extends import_obsidian.Modal {
+  constructor(app, info, onChoose) {
+    super(app);
+    this.info = info;
+    this.onChoose = onChoose;
+    this.choice = "ask-later";
+  }
+  onOpen() {
+    const { contentEl } = this;
+    const { source, sections, worldBuilder } = this.info;
+    contentEl.addClass("wb-modal", "wb-migrate-modal");
+    this.setTitle("Universe Builder now has its own folder");
+    const total = sections.reduce((n, s) => n + s.count, 0);
+    const found = sections.map((s) => `${s.label} (${s.count})`).join(", ");
+    contentEl.createEl("p", {
+      text: `Your Universe Builder notes are in "${source}/", a folder other plugins may also use. Universe Builder now keeps its notes in "${DEFAULT_FOLDER}/" instead.`
+    });
+    contentEl.createEl("p", {
+      text: `Moving only covers the Characters, Groups, Locations, Lore and Timeline folders in "${source}/". Found: ${found}, ${total} file${total === 1 ? "" : "s"} in all. Anything else in "${source}/" stays where it is. Links between notes keep working.`
+    });
+    if (worldBuilder) {
+      contentEl.createEl("p", {
+        cls: "wb-migrate-warning",
+        text: `The World Builder plugin is installed in this vault (${worldBuilder}). After moving, it will no longer see these notes.`
+      });
+    }
+    contentEl.createEl("p", {
+      cls: "wb-migrate-note",
+      text: `Folder paths typed into other plugins or notes (for example a Dataview query on "${source}") aren't updated.`
+    });
+    const buttons = contentEl.createDiv({ cls: "wb-migrate-buttons" });
+    const add = (text, choice, cta = false) => {
+      const btn = buttons.createEl("button", { text });
+      if (cta) btn.addClass("mod-cta");
+      btn.addEventListener("click", () => {
+        this.choice = choice;
+        this.close();
+      });
+    };
+    add(`Move to ${DEFAULT_FOLDER}/ (recommended)`, "move", true);
+    add(`Keep ${source}/, ask again next update`, "ask-later");
+    add(`Keep ${source}/, don't ask again`, "decline");
+  }
+  onClose() {
+    this.contentEl.empty();
+    this.onChoose(this.choice);
+  }
+};
+var LegacyCleanupModal = class extends import_obsidian.Modal {
+  constructor(app, folder, emptyFolders, onChoose) {
+    super(app);
+    this.folder = folder;
+    this.emptyFolders = emptyFolders;
+    this.onChoose = onChoose;
+    this.choice = null;
+  }
+  onOpen() {
+    const { contentEl, folder, emptyFolders } = this;
+    contentEl.addClass("wb-modal", "wb-migrate-modal");
+    this.setTitle(`Delete the empty "${folder}" folder?`);
+    contentEl.createEl("p", {
+      text: `Your notes are now in "${DEFAULT_FOLDER}/", and "${folder}/" has no files left in it` + (emptyFolders.length ? ` (only empty folders: ${emptyFolders.join(", ")}).` : ".") + " Nothing uses it any more, so it can be deleted."
+    });
+    contentEl.createEl("p", {
+      cls: "wb-migrate-note",
+      text: `Deleted folders go to the trash, following Obsidian's "Deleted files" setting.`
+    });
+    const buttons = contentEl.createDiv({ cls: "wb-migrate-buttons" });
+    const add = (text, choice, cta = false) => {
+      const btn = buttons.createEl("button", { text });
+      if (cta) btn.addClass("mod-cta");
+      btn.addEventListener("click", () => {
+        this.choice = choice;
+        this.close();
+      });
+    };
+    add(`Delete ${folder}/`, "delete", true);
+    add(`Keep ${folder}/`, "keep");
+  }
+  onClose() {
+    this.contentEl.empty();
+    this.onChoose(this.choice);
+  }
+};
 var UniverseBuilderSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
@@ -2621,9 +2709,9 @@ var UniverseBuilderSettingTab = class extends import_obsidian.PluginSettingTab {
   getSettingDefinitions() {
     return [
       {
-        name: "World folder",
-        desc: "Root folder for all world-building notes.",
-        aliases: ["root", "directory", "path"],
+        name: "Universe folder",
+        desc: `Root folder for all Universe Builder notes. Changing it doesn't move existing notes; to move notes out of an old "World" folder, run the "Move notes out of the World folder" command.`,
+        aliases: ["world folder", "root", "directory", "path"],
         control: {
           type: "text",
           key: "worldFolder",
@@ -2646,7 +2734,7 @@ var UniverseBuilderSettingTab = class extends import_obsidian.PluginSettingTab {
   }
   /**
    * Normalises values before they are stored, preserving the rules the old imperative tab
-   * applied in its onChange handlers: an empty world folder falls back to "World", and the
+   * applied in its onChange handlers: an empty folder falls back to the default, and the
    * editor choice is always "live" or "raw".
    */
   async setControlValue(key, value) {
@@ -2665,6 +2753,12 @@ var UniverseBuilderSettingTab = class extends import_obsidian.PluginSettingTab {
   }
 };
 var UniverseBuilderPlugin = class extends import_obsidian.Plugin {
+  constructor() {
+    super(...arguments);
+    // ─── Folder migration (World/ -> UniverseBuilder/) ───────────────────────────
+    /** Set while the prompt is open or a move is running, so the check never runs twice at once. */
+    this.migrationBusy = false;
+  }
   async onload() {
     await this.loadSettings();
     this.registerView(VIEW_TYPE, (leaf) => new UniverseBuilderView(leaf, this));
@@ -2717,6 +2811,11 @@ var UniverseBuilderPlugin = class extends import_obsidian.Plugin {
             changed = true;
           }
         }
+        const parent = this.settings.collapsedParents.indexOf(oldPath);
+        if (parent !== -1) {
+          this.settings.collapsedParents[parent] = file.path;
+          changed = true;
+        }
         const sub = this.settings.collapsedSubsidiaries.indexOf(oldPath);
         if (sub !== -1) {
           this.settings.collapsedSubsidiaries[sub] = file.path;
@@ -2738,6 +2837,276 @@ var UniverseBuilderPlugin = class extends import_obsidian.Plugin {
       })
     );
     this.addSettingTab(new UniverseBuilderSettingTab(this.app, this));
+    this.addCommand({
+      id: "move-world-folder",
+      name: "Move notes out of the World folder",
+      callback: () => void this.checkFolderMigration(true)
+    });
+    this.app.workspace.onLayoutReady(() => void this.checkFolderMigration());
+  }
+  /**
+   * Offers to move the section folders out of the legacy World folder. Runs once per plugin
+   * update until settled (moved, declined, or nothing to move). `manual` (the command) ignores
+   * the recorded state and always re-checks.
+   */
+  async checkFolderMigration(manual = false) {
+    if (this.migrationBusy) return;
+    const state = this.settings.folderMigration;
+    const cleanupPending = !manual && state.status === "moved" && !state.legacyCleanup;
+    if (!manual && !cleanupPending && (state.status || state.askedInVersion === this.manifest.version)) return;
+    this.migrationBusy = true;
+    try {
+      if (cleanupPending) {
+        await this.offerLegacyCleanup();
+        return;
+      }
+      const current = this.settings.worldFolder.toLowerCase();
+      if (current !== LEGACY_FOLDER.toLowerCase() && current !== DEFAULT_FOLDER.toLowerCase()) {
+        if (manual) {
+          new import_obsidian.Notice(`Universe Builder uses the custom folder "${this.settings.worldFolder}", so there's nothing to move.`);
+        } else {
+          state.status = "not-needed";
+          await this.saveSettings();
+        }
+        return;
+      }
+      const legacy = this.findLegacyFolder();
+      const sections = legacy ? this.legacySections(legacy) : [];
+      if (!legacy || !sections.length) {
+        if (manual && state.status === "moved" && legacy && !this.hasFiles(legacy)) {
+          await this.offerLegacyCleanup();
+          return;
+        }
+        if (manual) new import_obsidian.Notice(`There are no Universe Builder notes in "${LEGACY_FOLDER}/" to move.`);
+        if (current === LEGACY_FOLDER.toLowerCase()) this.settings.worldFolder = DEFAULT_FOLDER;
+        if (!state.status) state.status = "not-needed";
+        await this.saveSettings();
+        this.refreshSidebar();
+        return;
+      }
+      const info = {
+        source: legacy.path,
+        sections: sections.map((s) => ({ label: s.label, count: s.files.length })),
+        worldBuilder: await this.detectWorldBuilder()
+      };
+      const choice = await new Promise((resolve) => {
+        new FolderMigrationModal(this.app, info, resolve).open();
+      });
+      if (choice === "move") {
+        await this.moveLegacyFolder();
+      } else {
+        this.settings.worldFolder = legacy.path;
+        if (choice === "decline") {
+          state.status = "declined";
+        } else {
+          delete state.status;
+          state.askedInVersion = this.manifest.version;
+        }
+        await this.saveSettings();
+        this.refreshSidebar();
+      }
+    } catch (e) {
+      console.error("Universe Builder: folder migration check failed", e);
+    } finally {
+      this.migrationBusy = false;
+    }
+  }
+  /** The top-level legacy folder, matched case-insensitively (e.g. "World" or "world"). */
+  findLegacyFolder() {
+    for (const child of this.app.vault.getRoot().children) {
+      if (child instanceof import_obsidian.TFolder && child.name.toLowerCase() === LEGACY_FOLDER.toLowerCase()) return child;
+    }
+    return null;
+  }
+  /** The section folders inside `root` that hold at least one file (any type), with those files. */
+  legacySections(root) {
+    const out = [];
+    for (const tab of SECTION_TABS) {
+      const label = SECTION_LABELS[tab];
+      const folder = root.children.find(
+        (c) => c instanceof import_obsidian.TFolder && c.name.toLowerCase() === label.toLowerCase()
+      );
+      if (!folder) continue;
+      const files = [];
+      import_obsidian.Vault.recurseChildren(folder, (f) => {
+        if (f instanceof import_obsidian.TFile) files.push(f);
+      });
+      if (files.length) out.push({ label, folder, files });
+    }
+    return out;
+  }
+  /**
+   * Whether the original World Builder plugin is installed, using only public API: its manifest
+   * in the plugins folder means installed, its id in community-plugins.json means enabled.
+   * Returns null when it isn't installed or the check fails (the prompt then just omits the warning).
+   */
+  async detectWorldBuilder() {
+    try {
+      const { adapter, configDir } = this.app.vault;
+      if (!await adapter.exists(`${configDir}/plugins/${WORLD_BUILDER_ID}/manifest.json`)) return null;
+      let enabled = [];
+      try {
+        enabled = JSON.parse(await adapter.read(`${configDir}/community-plugins.json`));
+      } catch (e) {
+      }
+      return Array.isArray(enabled) && enabled.includes(WORLD_BUILDER_ID) ? "enabled" : "disabled";
+    } catch (e) {
+      return null;
+    }
+  }
+  /**
+   * Moves each section folder from the legacy folder into DEFAULT_FOLDER. A section whose
+   * destination doesn't exist yet is moved as one folder; otherwise (or if that fails) it's moved
+   * file by file, skipping any file that already exists at the destination. Nothing is ever
+   * overwritten or deleted, apart from folders left empty by the move. Obsidian's file manager
+   * does the moving, so links to the moved notes are updated per the user's settings.
+   */
+  async moveLegacyFolder() {
+    const state = this.settings.folderMigration;
+    const legacy = this.findLegacyFolder();
+    const sections = legacy ? this.legacySections(legacy) : [];
+    const moved = /* @__PURE__ */ new Map();
+    const skipped = [];
+    const failed = [];
+    const { vault, fileManager } = this.app;
+    try {
+      await ensureFolder(this.app, DEFAULT_FOLDER);
+    } catch (e) {
+      console.error(`Universe Builder: couldn't create "${DEFAULT_FOLDER}"`, e);
+      new import_obsidian.Notice(`Couldn't create the "${DEFAULT_FOLDER}" folder, so nothing was moved.`);
+      return;
+    }
+    for (const { label, folder, files } of sections) {
+      const dest = `${DEFAULT_FOLDER}/${label}`;
+      const srcPrefix = folder.path;
+      const targetOf = (f) => dest + f.path.slice(srcPrefix.length);
+      if (!vault.getAbstractFileByPath(dest)) {
+        const plan = files.map((f) => [f.path, targetOf(f)]);
+        try {
+          await fileManager.renameFile(folder, dest);
+          for (const [from, to] of plan) moved.set(from, to);
+          continue;
+        } catch (e) {
+          console.warn(`Universe Builder: moving "${srcPrefix}" as a folder failed, moving file by file`, e);
+        }
+      }
+      for (const file of files) {
+        const target = targetOf(file);
+        if (vault.getAbstractFileByPath(target)) {
+          skipped.push(file.path);
+          continue;
+        }
+        const from = file.path;
+        try {
+          await ensureFolder(this.app, target.slice(0, target.lastIndexOf("/")));
+          await fileManager.renameFile(file, target);
+          moved.set(from, target);
+        } catch (e) {
+          console.error(`Universe Builder: couldn't move "${from}"`, e);
+          failed.push(from);
+        }
+      }
+      await this.removeEmptyFolders(folder);
+    }
+    const leftovers = legacy && this.hasFiles(legacy) ? legacy.children.map((c) => c.name) : [];
+    this.remapPaths(moved);
+    if (moved.size || !failed.length) this.settings.worldFolder = DEFAULT_FOLDER;
+    if (failed.length) {
+      delete state.status;
+      delete state.askedInVersion;
+    } else {
+      state.status = "moved";
+      delete state.askedInVersion;
+    }
+    await this.saveSettings();
+    this.refreshSidebar();
+    const lines = [`Moved ${moved.size} file${moved.size === 1 ? "" : "s"} to "${DEFAULT_FOLDER}/".`];
+    if (skipped.length) {
+      lines.push(`${skipped.length} skipped because a file with the same name was already there: ${skipped.join(", ")}.`);
+    }
+    if (failed.length) {
+      lines.push(`${failed.length} couldn't be moved (see the developer console); you'll be asked again next launch: ${failed.join(", ")}.`);
+    }
+    if (leftovers.length && legacy) lines.push(`Left in "${legacy.path}/": ${leftovers.join(", ")}.`);
+    new import_obsidian.Notice(lines.join("\n"), skipped.length || failed.length ? 0 : 8e3);
+    if (!failed.length) await this.offerLegacyCleanup();
+  }
+  /** True when `folder` or any folder inside it holds at least one file. */
+  hasFiles(folder) {
+    let found = false;
+    import_obsidian.Vault.recurseChildren(folder, (f) => {
+      if (f instanceof import_obsidian.TFile) found = true;
+    });
+    return found;
+  }
+  /**
+   * After a move, offers to delete the legacy World folder when it holds no files (empty
+   * subfolders don't count), since nothing uses it any more. A vault shared with the original
+   * World Builder keeps its World/Factions notes, so it never qualifies. "Delete" sends the
+   * folder to the trash per Obsidian's "Deleted files" setting. The answer is recorded;
+   * closing the dialog leaves it unanswered, so it's offered again on the next launch.
+   */
+  async offerLegacyCleanup() {
+    const legacy = this.findLegacyFolder();
+    if (!legacy || this.hasFiles(legacy)) return;
+    const emptyFolders = [];
+    import_obsidian.Vault.recurseChildren(legacy, (f) => {
+      if (f instanceof import_obsidian.TFolder && f !== legacy) emptyFolders.push(f.path.slice(legacy.path.length + 1));
+    });
+    const choice = await new Promise((resolve) => {
+      new LegacyCleanupModal(this.app, legacy.path, emptyFolders, resolve).open();
+    });
+    if (!choice) return;
+    const state = this.settings.folderMigration;
+    if (choice === "keep") {
+      state.legacyCleanup = "kept";
+    } else {
+      const current = this.findLegacyFolder();
+      if (current && this.hasFiles(current)) {
+        new import_obsidian.Notice(`"${current.path}/" has files in it again, so it wasn't deleted.`);
+        return;
+      }
+      try {
+        if (current) await this.app.fileManager.trashFile(current);
+        state.legacyCleanup = "deleted";
+        new import_obsidian.Notice(`Deleted the empty "${legacy.path}/" folder.`);
+      } catch (e) {
+        console.error(`Universe Builder: couldn't delete "${legacy.path}"`, e);
+        new import_obsidian.Notice(`Couldn't delete "${legacy.path}/" (see the developer console).`);
+        return;
+      }
+    }
+    await this.saveSettings();
+  }
+  /** Deletes `folder` and any subfolders that hold no files, deepest first. */
+  async removeEmptyFolders(folder) {
+    for (const child of [...folder.children]) {
+      if (child instanceof import_obsidian.TFolder) await this.removeEmptyFolders(child);
+    }
+    if (folder.children.length === 0) {
+      try {
+        await this.app.vault.delete(folder);
+      } catch (e) {
+        console.warn(`Universe Builder: couldn't remove the empty "${folder.path}" folder`, e);
+      }
+    }
+  }
+  /** Points every note path stored in settings at its new location after a move. */
+  remapPaths(moved) {
+    if (!moved.size) return;
+    const remap = (paths) => paths.map((p) => {
+      var _a;
+      return (_a = moved.get(p)) != null ? _a : p;
+    });
+    const s = this.settings;
+    for (const key of Object.keys(s.characterOrder)) s.characterOrder[key] = remap(s.characterOrder[key]);
+    for (const tab of Object.keys(s.sectionOrder)) {
+      const order = s.sectionOrder[tab];
+      if (order) s.sectionOrder[tab] = remap(order);
+    }
+    s.collapsedParents = remap(s.collapsedParents);
+    s.collapsedSubsidiaries = remap(s.collapsedSubsidiaries);
+    s.bookmarks = remap(s.bookmarks);
   }
   async activateSidebar() {
     var _a;
@@ -2756,7 +3125,7 @@ var UniverseBuilderPlugin = class extends import_obsidian.Plugin {
     }
   }
   async loadSettings() {
-    var _a, _b, _c, _d, _e, _f, _g, _h;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i;
     const data = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
     this.settings.characterOrder = (_a = data == null ? void 0 : data.characterOrder) != null ? _a : {};
@@ -2767,6 +3136,7 @@ var UniverseBuilderPlugin = class extends import_obsidian.Plugin {
     this.settings.sectionOrder = (_f = data == null ? void 0 : data.sectionOrder) != null ? _f : {};
     this.settings.bookmarks = (_g = data == null ? void 0 : data.bookmarks) != null ? _g : [];
     this.settings.collapsedBookmarkGroups = (_h = data == null ? void 0 : data.collapsedBookmarkGroups) != null ? _h : [];
+    this.settings.folderMigration = { ...(_i = data == null ? void 0 : data.folderMigration) != null ? _i : {} };
     this.migrateLegacySettings(data);
     this.settings.inlineEditor = (data == null ? void 0 : data.inlineEditor) === "raw" ? "raw" : "live";
   }
