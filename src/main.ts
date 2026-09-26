@@ -2,6 +2,7 @@ import {
 	App,
 	ItemView,
 	MarkdownRenderer,
+	Menu,
 	Modal,
 	Notice,
 	Component,
@@ -157,6 +158,21 @@ interface PortraitMatch {
 
 /** An image dragged onto a card: a file already in the vault, or one from outside it (e.g. File Explorer). */
 type DroppedImage = { kind: "vault"; file: TFile } | { kind: "external"; file: File };
+
+/**
+ * Whether the section header shows the Back / Forward buttons. Hidden for now (a floating card
+ * covers the section header anyway; the expanded card's toolbar has its own Back / Forward, see
+ * navigateCard). The navigation history behind them (recordNav, navigateBack, navigateForward,
+ * applyNavEntry) is still kept up to date, so setting this to true brings the header ones back.
+ */
+const SHOW_NAV_BUTTONS = false;
+
+/** Space between a floating (expanded) card and the edges of the area it covers (px). */
+const FLOAT_GAP = 20;
+/** Bottom gap: 18px more, so a status bar over the bottom of the sidebar doesn't cover the card's edge. */
+const FLOAT_GAP_BOTTOM = FLOAT_GAP + 18;
+/** Length of the float-up / shrink-back animation when a card is expanded or collapsed (ms; keep in step with styles.css). */
+const FLOAT_MS = 220;
 
 /** Subfolder of the Universe Builder folder that portrait images from outside the vault are imported into. */
 const IMAGES_SUBFOLDER = "Images";
@@ -670,6 +686,18 @@ class UniverseBuilderView extends ItemView {
 	} | null = null;
 	/** Note path whose editor should open as soon as its card is redrawn (after switching edits triggers a save + redraw). */
 	private pendingEditPath: string | null = null;
+	/** The expanded card, floating over the list (see enterFloat). Only one card is expanded at a time. */
+	private floating: {
+		card: HTMLElement;
+		/** Holds the card's place (and height) in its list, so the list doesn't shift and the card can return to it. */
+		placeholder: HTMLElement;
+		pane: HTMLElement;
+		backdrop: HTMLElement;
+		observer: ResizeObserver;
+		draggable: string | null;
+	} | null = null;
+	/** Set while re-opening a card after a redraw, so it floats straight into place without animating. */
+	private floatInstantly = false;
 
 	// Rebuilt on every render(); let switchTab() and the nav buttons operate without closures.
 	private tabBarEl: HTMLElement | null = null;
@@ -687,6 +715,8 @@ class UniverseBuilderView extends ItemView {
 	/** True while a back/forward navigation is replaying a history entry, so it isn't re-recorded. */
 	private restoringNav = false;
 	private navButtons: { back: HTMLButtonElement; fwd: HTMLButtonElement }[] = [];
+	/** Back / Forward in the expanded card's toolbar; these step between expanded entries only (see navigateCard). */
+	private cardNavButtons: { back: HTMLButtonElement; fwd: HTMLButtonElement }[] = [];
 
 	constructor(leaf: WorkspaceLeaf, plugin: UniverseBuilderPlugin) {
 		super(leaf);
@@ -727,7 +757,9 @@ class UniverseBuilderView extends ItemView {
 		// The old DOM (and any open inline editor in it) is gone.
 		this.activeEdit?.abandon();
 		this.activeEdit = null;
+		void this.exitFloat(true);
 		this.navButtons = [];
+		this.cardNavButtons = [];
 		this.bookmarkHeaderButtons = [];
 		this.sectionConfigs = {};
 
@@ -738,12 +770,13 @@ class UniverseBuilderView extends ItemView {
 
 		const header = fixed.createDiv("wb-header");
 		header.createEl("h2", { text: "Universe Builder" });
-		// Bookmarks: icon-only, anchored to the right of the title. Highlighted while the Bookmarks view is open.
+		// Bookmarks: icon + "Bookmarks" label, anchored to the right of the title. Highlighted while the Bookmarks view is open.
 		const bookmarksBtn = header.createEl("button", {
 			cls: "wb-btn-secondary wb-icon-btn wb-bookmarks-btn",
 			attr: { type: "button", "aria-label": "Bookmarks" },
 		});
-		setIcon(bookmarksBtn, "bookmark");
+		setIcon(bookmarksBtn.createSpan({ cls: "wb-btn-icon" }), "bookmark");
+		bookmarksBtn.createSpan({ text: "Bookmarks" });
 		bookmarksBtn.onclick = () => this.toggleBookmarksView();
 		this.bookmarkHeaderButtons.push(bookmarksBtn);
 
@@ -941,6 +974,7 @@ class UniverseBuilderView extends ItemView {
 		// Re-open the cards that were expanded before the redraw, without adding history entries.
 		if (reopen.length) {
 			this.restoringNav = true;
+			this.floatInstantly = true;
 			try {
 				for (const { tab, path } of reopen) {
 					const card = contents[tab]?.body.querySelector<HTMLElement>(`.wb-card[data-path="${CSS.escape(path)}"]`);
@@ -949,6 +983,7 @@ class UniverseBuilderView extends ItemView {
 				}
 			} finally {
 				this.restoringNav = false;
+				this.floatInstantly = false;
 			}
 			this.refreshCurrentCardHighlight();
 		}
@@ -1298,27 +1333,30 @@ class UniverseBuilderView extends ItemView {
 	}
 
 	/**
-	 * A tab's section header (fixed region): Back/Forward and the label on the left; Reload and
-	 * (for the entry sections) + New on the right. (The Bookmarks button lives in the title row.)
+	 * A tab's section header (fixed region): the label on the left (after Back/Forward, when
+	 * SHOW_NAV_BUTTONS is on); Reload and (for the entry sections) + New on the right. (The
+	 * Bookmarks button lives in the title row.)
 	 */
 	private renderSectionHeader(pane: TabPane, label: string, onCreate: (() => void) | null, reload: boolean) {
 		const hdr = pane.head.createDiv("wb-section-header");
-		// Back/forward, then the label, grouped together at the left edge of the header.
+		// Back/forward (if shown), then the label, grouped together at the left edge of the header.
 		const titleGroup = hdr.createDiv("wb-section-title");
-		const navGroup = titleGroup.createDiv("wb-nav-buttons");
-		const backBtn = navGroup.createEl("button", {
-			cls: "wb-nav-btn",
-			text: "<",
-			attr: { type: "button", "aria-label": "Back" },
-		});
-		const fwdBtn = navGroup.createEl("button", {
-			cls: "wb-nav-btn",
-			text: ">",
-			attr: { type: "button", "aria-label": "Forward" },
-		});
-		backBtn.onclick = () => this.navigateBack();
-		fwdBtn.onclick = () => this.navigateForward();
-		this.navButtons.push({ back: backBtn, fwd: fwdBtn });
+		if (SHOW_NAV_BUTTONS) {
+			const navGroup = titleGroup.createDiv("wb-nav-buttons");
+			const backBtn = navGroup.createEl("button", {
+				cls: "wb-nav-btn",
+				text: "<",
+				attr: { type: "button", "aria-label": "Back" },
+			});
+			const fwdBtn = navGroup.createEl("button", {
+				cls: "wb-nav-btn",
+				text: ">",
+				attr: { type: "button", "aria-label": "Forward" },
+			});
+			backBtn.onclick = () => this.navigateBack();
+			fwdBtn.onclick = () => this.navigateForward();
+			this.navButtons.push({ back: backBtn, fwd: fwdBtn });
+		}
 		titleGroup.createSpan({ text: label });
 		const actions = hdr.createDiv("wb-section-actions");
 		if (reload) {
@@ -1706,29 +1744,49 @@ class UniverseBuilderView extends ItemView {
 	}
 
 	/**
-	 * Expands a card in place to show the note's text (all but the portrait image) instead of opening it in the
-	 * editor, so writing in the main pane isn't interrupted. Modify MD in the expanded area opens
-	 * the note the normal way; Edit edits its markdown inline. Clicking the card again (or its chevron) collapses it.
+	 * Expands a card to show the note's text (all but the portrait image) instead of opening it in the
+	 * editor, so writing in the main pane isn't interrupted. The expanded card floats over the list
+	 * (see enterFloat), and only one card is expanded at a time: expanding another closes the open
+	 * one first. Modify MD opens the note the normal way; Edit edits its markdown inline, still
+	 * floating. Clicking the card's title row again (its X) collapses it back into the list.
+	 * `force` skips the "Discard changes?" question (already answered).
 	 */
 	private toggleCardExpand(tab: WBTab, card: HTMLElement, entry: NoteEntry, force = false) {
 		const wasExpanded = card.classList.contains("wb-card-expanded");
 		// Collapsing a card mid-edit would throw the edits away: ask first.
-		const editingThis = this.activeEdit?.card === card;
-		if (wasExpanded && !force && editingThis && this.activeEdit!.isDirty()) {
+		if (wasExpanded && !force && this.activeEdit?.card === card && this.activeEdit.isDirty()) {
 			void confirmModal(this.app, "Discard changes?", `Your edits to "${entry.file.basename}" haven't been saved.`, "Discard").then((ok) => {
 				if (ok) this.toggleCardExpand(tab, card, entry, true);
 			});
 			return;
 		}
-		if (editingThis) { this.activeEdit!.abandon(); this.activeEdit = null; }
-		card.querySelector(":scope > .wb-card-expand")?.remove();
-		card.removeClass("wb-card-expanded");
-		card.setAttribute("aria-expanded", "false");
 		if (wasExpanded) {
+			this.collapseCard(card, false);
 			this.recordNav(tab, null);
 			return;
 		}
 
+		// Only one card floats at a time: close the open one (asking first if it has unsaved edits).
+		const other = this.floating?.card;
+		if (other && other !== card && other.isConnected && other.classList.contains("wb-card-expanded")) {
+			if (!force && this.activeEdit?.card === other && this.activeEdit.isDirty()) {
+				const name = this.entryByPath.get(other.getAttribute("data-path") ?? "")?.file.basename ?? "this entry";
+				void confirmModal(this.app, "Discard changes?", `Your edits to "${name}" haven't been saved.`, "Discard").then((ok) => {
+					if (ok) this.toggleCardExpand(tab, card, entry, true);
+				});
+				return;
+			}
+		}
+		// Switching straight from one expanded entry to another (a [[link]], Back / Forward): the
+		// old card drops back into the list and the new one appears in its place, with no animation.
+		let switching = false;
+		if (other && other !== card && other.isConnected && other.classList.contains("wb-card-expanded")) {
+			this.collapseCard(other, true);
+			switching = true;
+		}
+
+		// Lift the card out of the list, measured while it's still collapsed so it grows from there.
+		this.enterFloat(card, switching);
 		card.addClass("wb-card-expanded");
 		card.setAttribute("aria-expanded", "true");
 
@@ -1739,11 +1797,27 @@ class UniverseBuilderView extends ItemView {
 		// Clicks inside the expanded area (the Edit button, links, selecting text) shouldn't
 		// also toggle the card's own expand/collapse handler.
 		expand.onclick = (e) => e.stopPropagation();
-		// Same for keys: Enter/Space on the footer buttons shouldn't reach the card's own key handler.
+		// Same for keys: Enter/Space on the toolbar buttons shouldn't reach the card's own key handler.
 		expand.onkeydown = (e) => e.stopPropagation();
 
 		const body = expand.createDiv("wb-card-expand-body");
 		body.addClass("markdown-rendered");
+		// Text in the preview can be selected (see styles.css) and copied with Ctrl/Cmd+C; custom
+		// views get no right-click menu from Obsidian, so offer Copy for a selection made here.
+		body.addEventListener("contextmenu", (e) => {
+			const selection = body.win.getSelection();
+			const text = selection?.toString() ?? "";
+			if (!text.trim() || !selection?.anchorNode || !body.contains(selection.anchorNode)) return;
+			e.preventDefault();
+			e.stopPropagation();
+			const menu = new Menu();
+			menu.addItem((item) =>
+				item.setTitle("Copy").setIcon("copy").onClick(() => {
+					void navigator.clipboard.writeText(text).catch(() => new Notice("Couldn't copy the selection."));
+				})
+			);
+			menu.showAtMouseEvent(e);
+		});
 		// Frontmatter (properties already shown on the card above) and the portrait image (already
 		// the card's thumbnail) are left out, plus the leading "# Name" heading the templates open
 		// with, which just restates the card's own title. Every other image is kept, shown as a
@@ -1773,19 +1847,41 @@ class UniverseBuilderView extends ItemView {
 			if (href) this.followWikiLink(href, entry.file.path);
 		});
 
-		// Bookmark (left); Modify MD + Edit (right). They sit at the bottom, under their own divider,
-		// so they don't compete with the text.
-		const footer = expand.createDiv("wb-card-expand-footer");
-		const bookmarkBtn = footer.createEl("button", {
+		// Back / Forward | Bookmark (left); Modify MD + Edit (right). They sit at the top of the
+		// expanded area, above their own divider and the note's text (or the editor), so they're
+		// reachable without scrolling a long entry.
+		const toolbar = createDiv("wb-card-expand-toolbar");
+		body.insertAdjacentElement("beforebegin", toolbar);
+		const leftGroup = toolbar.createDiv("wb-card-expand-left");
+		// Back / Forward: step through the entries expanded before and after this one (e.g. after
+		// following a [[link]] in the preview).
+		const navBtn = (label: string, icon: string, dir: -1 | 1) => {
+			const btn = leftGroup.createEl("button", {
+				cls: "wb-btn-secondary wb-icon-btn wb-card-nav-btn",
+				attr: { type: "button", "aria-label": label },
+			});
+			setIcon(btn, icon);
+			btn.onclick = () => this.navigateCard(dir);
+			return btn;
+		};
+		const cardBack = navBtn("Back", "chevron-left", -1);
+		const cardFwd = navBtn("Forward", "chevron-right", 1);
+		this.cardNavButtons.push({ back: cardBack, fwd: cardFwd });
+		this.updateNavButtonStates();
+		leftGroup.createSpan({ cls: "wb-toolbar-sep", text: "|", attr: { "aria-hidden": "true" } });
+		const bookmarkBtn = leftGroup.createEl("button", {
 			cls: "wb-btn-secondary wb-icon-btn wb-bookmark-toggle",
 			attr: { type: "button", "data-bookmark-path": entry.file.path },
 		});
-		setIcon(bookmarkBtn, "bookmark");
+		// Icon + label, like Modify MD / Edit beside it. The whole button (label included) turns the
+		// accent color while the entry is bookmarked.
+		setIcon(bookmarkBtn.createSpan({ cls: "wb-btn-icon" }), "bookmark");
+		bookmarkBtn.createSpan({ text: "Bookmark" });
 		this.syncBookmarkToggle(bookmarkBtn, this.plugin.settings.bookmarks.includes(entry.file.path));
 		bookmarkBtn.onclick = () => void this.toggleBookmark(entry.file.path);
 
 		// Right-hand group: [Modify MD] [Edit] while reading, swapped for [Cancel] [Save] while editing inline.
-		const actions = footer.createDiv("wb-card-expand-actions");
+		const actions = toolbar.createDiv("wb-card-expand-actions");
 		const showViewActions = () => {
 			actions.empty();
 			// Modify MD: opens the note in the main editor (what Edit used to do).
@@ -1805,7 +1901,8 @@ class UniverseBuilderView extends ItemView {
 			setIcon(cancelBtn.createSpan({ cls: "wb-btn-icon" }), "x");
 			cancelBtn.createSpan({ text: "Cancel" });
 			cancelBtn.onclick = () => void runExclusive(discard);
-			const saveBtn = actions.createEl("button", { cls: "wb-btn-primary", attr: { type: "button" } });
+			// Same look as Cancel beside it: the floating card's accent border already stands out.
+			const saveBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
 			setIcon(saveBtn.createSpan({ cls: "wb-btn-icon" }), "check");
 			saveBtn.createSpan({ text: "Save" });
 			saveBtn.onclick = () => void runExclusive(finishEditing);
@@ -1847,6 +1944,7 @@ class UniverseBuilderView extends ItemView {
 			body.show();
 			expand.removeClass("is-editing");
 			showViewActions();
+			// The card stays floating, back in read mode.
 		};
 
 		const startEditing = async () => {
@@ -1939,7 +2037,8 @@ class UniverseBuilderView extends ItemView {
 				if (this.activeEdit?.card === card) this.activeEdit = null;
 				editor?.destroy();
 				editor = null;
-				// Redraw so the card's title/badges/grouping reflect the new frontmatter, then re-open it (in read mode).
+				// Redraw so the card's title/badges/grouping reflect the new frontmatter, then re-open it
+				// (still floating, in read mode).
 				await this.render({ keepExpanded: true });
 				new Notice(`Saved "${entry.file.basename}".`);
 			} catch (err) {
@@ -1961,6 +2060,179 @@ class UniverseBuilderView extends ItemView {
 	}
 
 	/**
+	 * Collapses an expanded card back into its list: closes its inline editor (without saving), removes
+	 * the expanded area, and shrinks it from floating back into its place (at once if `instant`).
+	 */
+	private collapseCard(card: HTMLElement, instant: boolean) {
+		if (this.activeEdit?.card === card) {
+			this.activeEdit.abandon();
+			this.activeEdit = null;
+		}
+		card.querySelector(":scope > .wb-card-expand")?.remove();
+		card.removeClass("wb-card-expanded");
+		card.setAttribute("aria-expanded", "false");
+		if (this.floating?.card === card) void this.exitFloat(instant);
+	}
+
+	// ─── Floating card (expanded entry over the list) ──────────────────────────────
+
+	/**
+	 * Floats an expanding card over the list: it covers the list area plus the section header and
+	 * search bar, from just under the section tabs to the bottom of the sidebar, inset by FLOAT_GAP
+	 * (FLOAT_GAP_BOTTOM at the bottom), with everything behind it dimmed. It stays floating in
+	 * read mode and while being edited inline. The card is lifted out of the list (position:
+	 * absolute on the view's root) and a placeholder of its height keeps its spot, so nothing below
+	 * it moves and exitFloat() can shrink it straight back. Call it before adding the card's
+	 * expanded contents: the animation starts from the card's current (collapsed) size. `instant`
+	 * skips the animation (used when switching straight from another expanded entry).
+	 */
+	private enterFloat(card: HTMLElement, instant = false) {
+		void this.exitFloat(true); // instant: finishes synchronously
+		const root = this.containerEl;
+		const pane = card.closest<HTMLElement>(".wb-tab-body");
+		if (!pane || !card.isConnected) return;
+
+		const start = this.rectInRoot(card);
+		const placeholder = createDiv("wb-edit-placeholder");
+		placeholder.style.height = `${start.height}px`;
+		card.insertAdjacentElement("beforebegin", placeholder);
+
+		const backdrop = root.createDiv("wb-edit-backdrop");
+		const observer = new ResizeObserver(() => this.updateFloatBounds());
+		observer.observe(root);
+		const fixed = root.querySelector<HTMLElement>(".wb-fixed");
+		if (fixed) observer.observe(fixed);
+		// The tab bar can wrap onto a second line when the sidebar is resized.
+		const tabBar = root.querySelector<HTMLElement>(".wb-tabs");
+		if (tabBar) observer.observe(tabBar);
+		this.floating = { card, placeholder, pane, backdrop, observer, draggable: card.getAttribute("draggable") };
+		this.updateFloatBounds();
+
+		// Cards are drag-sortable; don't let the floating one be picked up.
+		card.setAttribute("draggable", "false");
+		// The chevron becomes an X while floating: clicking the title row closes the card.
+		this.setCardChevron(card, "x");
+		root.addClass("wb-has-edit-focus");
+		pane.addClass("wb-edit-focus-pane");
+		card.addClass("wb-card-focus");
+		// Floating on a tab that isn't showing (e.g. re-opened by a redraw): keep that tab's float hidden.
+		const paneShown = pane.classList.contains("active");
+		root.toggleClass("wb-edit-focus-hidden", !paneShown);
+
+		if (instant || this.floatInstantly || !paneShown || this.reducedMotion()) {
+			backdrop.addClass("is-visible");
+			return;
+		}
+		// Start exactly where the card sat in the list, then grow to the focus bounds.
+		this.setFocusGeometry(card, start);
+		card.addClass("wb-card-focus-animating");
+		void card.offsetWidth; // commit the start position before transitioning away from it
+		backdrop.addClass("is-visible");
+		this.setFocusGeometry(card, this.focusTarget());
+		window.setTimeout(() => {
+			if (this.floating?.card !== card) return;
+			card.removeClass("wb-card-focus-animating");
+			this.setFocusGeometry(card, null); // hand over to the CSS bounds, which follow resizes
+		}, FLOAT_MS);
+	}
+
+	/**
+	 * Shrinks the floating card back into its place in the list and restores the list. Resolves
+	 * once the animation has finished. `instant` skips the animation (the card is being collapsed
+	 * or redrawn); so does a card that's no longer on screen.
+	 */
+	private async exitFloat(instant = false): Promise<void> {
+		const focus = this.floating;
+		if (!focus) return;
+		this.floating = null;
+		focus.observer.disconnect();
+		const { card, placeholder, pane, backdrop } = focus;
+		const finish = () => {
+			card.removeClass("wb-card-focus", "wb-card-focus-animating");
+			this.setFocusGeometry(card, null);
+			this.setCardChevron(card, "chevron-right");
+			if (focus.draggable === null) card.removeAttribute("draggable");
+			else card.setAttribute("draggable", focus.draggable);
+			placeholder.remove();
+			backdrop.remove();
+			pane.removeClass("wb-edit-focus-pane");
+			this.containerEl.removeClass("wb-has-edit-focus", "wb-edit-focus-hidden");
+		};
+		const visible = card.isConnected && placeholder.isConnected && card.offsetParent !== null;
+		if (instant || !visible || this.reducedMotion()) { finish(); return; }
+
+		const target = this.rectInRoot(placeholder);
+		this.setFocusGeometry(card, this.rectInRoot(card));
+		card.addClass("wb-card-focus-animating");
+		void card.offsetWidth;
+		backdrop.removeClass("is-visible");
+		// Back to the spot (and height) it had in the list, which the placeholder kept.
+		this.setFocusGeometry(card, target);
+		await new Promise<void>((resolve) => window.setTimeout(resolve, FLOAT_MS));
+		finish();
+	}
+
+	/** Swaps the icon in a card's title-row chevron (the collapsed arrow, or an X while the card floats). */
+	private setCardChevron(card: HTMLElement, icon: "chevron-right" | "x") {
+		const chevron = card.querySelector<HTMLElement>(":scope > .wb-card-row .wb-card-chevron, :scope > .wb-card-title .wb-card-chevron");
+		if (!chevron) return;
+		chevron.empty();
+		setIcon(chevron, icon);
+	}
+
+	/** Recomputes the edges of the area the floating card fills (CSS variables on the root). */
+	private updateFloatBounds() {
+		const root = this.containerEl;
+		const scroll = root.querySelector<HTMLElement>(".wb-scroll");
+		if (!scroll) return;
+		const r = root.getBoundingClientRect();
+		const sc = scroll.getBoundingClientRect();
+		const cs = getComputedStyle(scroll);
+		// Starts right under the section tabs, so the section header and search bar are covered too
+		// (searching while an entry floats would only filter the hidden list). The tabs stay usable.
+		const tabs = root.querySelector<HTMLElement>(".wb-tabs");
+		const top = (tabs ? tabs.getBoundingClientRect().bottom : sc.top) - r.top;
+		root.style.setProperty("--wb-focus-area-top", `${top}px`);
+		root.style.setProperty("--wb-focus-top", `${top + FLOAT_GAP}px`);
+		root.style.setProperty("--wb-focus-bottom", `${r.bottom - sc.bottom + FLOAT_GAP_BOTTOM}px`);
+		root.style.setProperty("--wb-focus-left", `${sc.left - r.left + (parseFloat(cs.paddingLeft) || 0)}px`);
+		root.style.setProperty("--wb-focus-right", `${r.right - sc.right + (parseFloat(cs.paddingRight) || 0)}px`);
+	}
+
+	/** Where the floating card ends up, in the root's coordinates. */
+	private focusTarget(): { top: number; left: number; width: number; height: number } {
+		const root = this.containerEl;
+		const r = root.getBoundingClientRect();
+		const px = (name: string) => parseFloat(root.style.getPropertyValue(name)) || 0;
+		const top = px("--wb-focus-top");
+		const left = px("--wb-focus-left");
+		return { top, left, width: r.width - left - px("--wb-focus-right"), height: r.height - top - px("--wb-focus-bottom") };
+	}
+
+	/** An element's box relative to the view's root (the floating card's containing block). */
+	private rectInRoot(el: HTMLElement): { top: number; left: number; width: number; height: number } {
+		const r = this.containerEl.getBoundingClientRect();
+		const b = el.getBoundingClientRect();
+		return { top: b.top - r.top, left: b.left - r.left, width: b.width, height: b.height };
+	}
+
+	/** Pins the card to an explicit box while animating; null goes back to the CSS focus bounds. */
+	private setFocusGeometry(card: HTMLElement, box: { top: number; left: number; width: number; height: number } | null) {
+		if (!box) {
+			for (const prop of ["top", "left", "width", "height", "right", "bottom"]) card.style.removeProperty(prop);
+			return;
+		}
+		card.setCssStyles({
+			top: `${box.top}px`, left: `${box.left}px`, width: `${box.width}px`, height: `${box.height}px`,
+			right: "auto", bottom: "auto",
+		});
+	}
+
+	private reducedMotion(): boolean {
+		return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+	}
+
+	/**
 	 * "Collapse all" for one section, triggered by double-clicking its (already active) tab button:
 	 * closes every expanded card preview and folds every collapsible group label in the section
 	 * (group groups on Characters, type groups and Subsidiaries on Groups, every tree label
@@ -1975,14 +2247,8 @@ class UniverseBuilderView extends ItemView {
 		let closedCard = false;
 		pane.body.querySelectorAll<HTMLElement>(".wb-card.wb-card-expanded").forEach((card) => {
 			// Leave a card with unsaved inline edits open rather than dropping the edits.
-			if (this.activeEdit?.card === card) {
-				if (this.activeEdit.isDirty()) return;
-				this.activeEdit.abandon();
-				this.activeEdit = null;
-			}
-			card.querySelector(":scope > .wb-card-expand")?.remove();
-			card.removeClass("wb-card-expanded");
-			card.setAttribute("aria-expanded", "false");
+			if (this.activeEdit?.card === card && this.activeEdit.isDirty()) return;
+			this.collapseCard(card, false);
 			closedCard = true;
 		});
 		if (closedCard) this.recordNav(tab, null);
@@ -2024,6 +2290,8 @@ class UniverseBuilderView extends ItemView {
 		Object.values(this.tabContents).forEach((c) => { c?.head.removeClass("active"); c?.body.removeClass("active"); });
 		this.tabContents[id]?.head.addClass("active");
 		this.tabContents[id]?.body.addClass("active");
+		// A floating (expanded) entry stays up on its own tab; other tabs show (and scroll) normally.
+		this.containerEl.toggleClass("wb-edit-focus-hidden", !!this.floating && this.floating.pane !== this.tabContents[id]?.body);
 		this.showTabSearchFn?.();
 		this.updateShadowFn?.();
 		this.updateBookmarkHeaderButtons();
@@ -2086,6 +2354,8 @@ class UniverseBuilderView extends ItemView {
 		const scrollEl = this.activeTab === tab ? container.closest<HTMLElement>(".wb-scroll") : null;
 		const scrollTop = scrollEl?.scrollTop ?? 0;
 		container.empty();
+		// The floating card, if it was one of these, went with the old list.
+		if (this.floating && !this.floating.card.isConnected) void this.exitFloat(true);
 
 		const entries = this.plugin.settings.bookmarks
 			.map((path) => this.entryByPath.get(path))
@@ -2151,6 +2421,7 @@ class UniverseBuilderView extends ItemView {
 		// Re-open the cards that were expanded before the redraw, without adding history entries.
 		if (wasExpanded.size) {
 			this.restoringNav = true;
+			this.floatInstantly = true;
 			try {
 				container.querySelectorAll<HTMLElement>(".wb-card").forEach((card) => {
 					const path = card.getAttribute("data-path") ?? "";
@@ -2159,6 +2430,7 @@ class UniverseBuilderView extends ItemView {
 				});
 			} finally {
 				this.restoringNav = false;
+				this.floatInstantly = false;
 			}
 		}
 		if (scrollEl) scrollEl.scrollTop = scrollTop;
@@ -2187,7 +2459,35 @@ class UniverseBuilderView extends ItemView {
 			back.toggleAttribute("disabled", !canBack);
 			fwd.toggleAttribute("disabled", !canForward);
 		}
+		// Card toolbars: drop the ones whose card was collapsed or redrawn, then update the rest.
+		this.cardNavButtons = this.cardNavButtons.filter(({ back }) => back.isConnected);
+		const cardBack = this.cardNavTarget(-1) !== null;
+		const cardFwd = this.cardNavTarget(1) !== null;
+		for (const { back, fwd } of this.cardNavButtons) {
+			back.toggleAttribute("disabled", !cardBack);
+			fwd.toggleAttribute("disabled", !cardFwd);
+		}
 		this.refreshCurrentCardHighlight();
+	}
+
+	/**
+	 * The nearest history entry before (-1) or after (1) the current one that has an expanded card,
+	 * or null. Entries without one (a tab switch, or a card being closed) are skipped: the card
+	 * toolbar's Back / Forward step from one expanded entry to the next.
+	 */
+	private cardNavTarget(dir: -1 | 1): number | null {
+		for (let i = this.navIndex + dir; i >= 0 && i < this.navHistory.length; i += dir) {
+			if (this.navHistory[i].cardPath) return i;
+		}
+		return null;
+	}
+
+	/** Back / Forward from an expanded card's toolbar: expands the previous / next expanded entry in the history. */
+	private navigateCard(dir: -1 | 1) {
+		const target = this.cardNavTarget(dir);
+		if (target === null) return;
+		this.navIndex = target;
+		this.applyNavEntry(this.navHistory[target]);
 	}
 
 	/**
@@ -2224,7 +2524,16 @@ class UniverseBuilderView extends ItemView {
 		this.restoringNav = true;
 		try {
 			this.switchTab(entry.tab);
-			if (entry.cardPath) this.revealCard(entry.tab, entry.cardPath);
+			if (entry.cardPath) {
+				this.revealCard(entry.tab, entry.cardPath);
+			} else {
+				// A history entry with no card: nothing on that tab is expanded, so close its floating card.
+				const float = this.floating;
+				const onTab = !!float && float.pane === this.tabContents[entry.tab]?.body;
+				if (float && onTab && !(this.activeEdit?.card === float.card && this.activeEdit.isDirty())) {
+					this.collapseCard(float.card, false);
+				}
+			}
 		} finally {
 			this.restoringNav = false;
 		}
@@ -2289,11 +2598,12 @@ class UniverseBuilderView extends ItemView {
 		}
 
 		if (!card.classList.contains("wb-card-expanded")) {
+			// Bring its spot in the list into view first: it floats up from there, and shrinks back
+			// to it when closed.
+			card.scrollIntoView({ block: "center" });
 			const entry = this.entryByPath.get(path);
 			if (entry) this.toggleCardExpand(tab, card, entry);
 		}
-
-		card.scrollIntoView({ block: "center", behavior: "smooth" });
 	}
 
 	/**
@@ -2637,6 +2947,9 @@ function resolveLivePreviewEditorClass(app: App): LivePreviewEditorClass | null 
  * When the portrait embed (`portrait`) is the first thing in the body on its own line (where the
  * plugin always puts it), that line is held back from the editor, since the card already shows
  * the portrait, and put back in front of the body on save. Every other image stays in the editor.
+ * Likewise the "# Title" heading line the templates open with (right after the portrait, or first
+ * in the body), which repeats the card's own title: only a line starting "# " (hash + space) at
+ * that spot counts; later "# " lines and "##" headings stay in the editor.
  * Returns null if the internal editor can't be created, so the caller can fall back.
  */
 function createLivePreviewEditor(
@@ -2720,7 +3033,7 @@ function createLivePreviewEditor(
 	});
 
 	const fullBody = fm ? fm.body : text;
-	// The portrait's line, kept out of the editor (see above); "" when it isn't at the top.
+	// The portrait's line and the "# Title" line, kept out of the editor (see above); "" when neither is at the top.
 	let lead = "";
 	const bodyOffset = text.length - fullBody.length;
 	if (portrait && portrait.start >= bodyOffset) {
@@ -2730,6 +3043,9 @@ function createLivePreviewEditor(
 		const lineEnd = fullBody.slice(end).match(/^[ \t]*(?:\r?\n|$)(?:[ \t]*\r?\n)*/);
 		if (!fullBody.slice(0, start).trim() && lineEnd) lead = fullBody.slice(0, end + lineEnd[0].length);
 	}
+	// The title heading next, with any blank lines around it, so the editor opens on the first section.
+	const heading = fullBody.slice(lead.length).match(/^(?:[ \t]*\r?\n)*# [^\r\n]*(?:\r?\n|$)(?:[ \t]*\r?\n)*/);
+	if (heading) lead += heading[0];
 	const bodyText = fullBody.slice(lead.length);
 	let initialBody = bodyText;
 	try {

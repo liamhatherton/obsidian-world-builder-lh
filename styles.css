@@ -6,6 +6,8 @@
  *   .wb-scroll - the lists; the only part that scrolls
  */
 .workspace-leaf-content.wb-sidebar {
+	/* Containing block for the floating expanded card (.wb-card-focus). */
+	position: relative;
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
@@ -362,6 +364,8 @@
 }
 .wb-card-chevron svg { width: 14px; height: 14px; }
 .wb-card-expanded .wb-card-chevron { transform: rotate(90deg); }
+/* Floating (expanded): the chevron is swapped for an X (see setCardChevron), shown upright. */
+.wb-card-expanded.wb-card-focus .wb-card-chevron { transform: none; transition: none; }
 
 /*
  * A light tint + lighter border while expanded, just enough for the card to stand out from its
@@ -405,6 +409,10 @@
 	font-size: 0.8em;
 	color: var(--text-normal);
 	cursor: text;
+	/* Obsidian turns text selection off across its UI; turn it back on so the preview's text can be
+	   highlighted and copied. */
+	-webkit-user-select: text;
+	user-select: text;
 	/* Notes can run long; keep an expanded card from taking over the whole sidebar. */
 	max-height: 60vh;
 	overflow-y: auto;
@@ -420,14 +428,15 @@
 .wb-card-expand-body > :first-child { margin-top: 0; }
 .wb-card-expand-body > :last-child { margin-bottom: 0; }
 
-/* Bookmark (left) and the action buttons (right): bottom of the expanded area, under its own divider (same darker token as above). */
-.wb-card-expand-footer {
+/* Bookmark (left) and the action buttons (right): top of the expanded area, above its own divider
+   (same darker token as above) and the note's text or editor. */
+.wb-card-expand-toolbar {
 	display: flex;
 	justify-content: space-between;
 	align-items: stretch;
-	margin-top: 10px;
-	padding-top: 10px;
-	border-top: 1px solid var(--wb-expand-divider);
+	margin-bottom: 10px;
+	padding-bottom: 10px;
+	border-bottom: 1px solid var(--wb-expand-divider);
 }
 /* Right-hand button group: [Modify MD] [Edit] while reading, [Cancel] [Save] while editing inline. */
 .wb-card-expand-actions {
@@ -435,11 +444,41 @@
 	align-items: stretch;
 	gap: 6px;
 }
-.wb-card-expand-actions .wb-btn-primary {
-	display: inline-flex;
-	align-items: center;
-	gap: 5px;
+/* Compact buttons (bookmark, Modify MD / Edit, Cancel / Save). Two-class selectors so they beat
+   Obsidian's `button:not(.clickable-icon)` rule, which sets a taller fixed height. */
+.wb-card-expand-toolbar .wb-btn-secondary {
+	height: auto;
+	gap: 4px;
+	padding: 2px 7px;
+	font-size: 0.75em;
+	line-height: 1.4;
 }
+.wb-card-expand-toolbar .wb-icon-btn { padding: 2px 5px; }
+/* Left-hand group: [<] [>] | [Bookmark]. */
+.wb-card-expand-left {
+	display: flex;
+	align-items: stretch;
+	gap: 4px;
+}
+.wb-card-expand-toolbar .wb-card-nav-btn:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+.wb-card-expand-toolbar .wb-card-nav-btn:disabled:hover { background: var(--interactive-normal); color: var(--text-muted); }
+/* Faint divider between Back / Forward and Bookmark. */
+.wb-toolbar-sep {
+	align-self: center;
+	padding: 0 2px;
+	color: var(--text-faint);
+	opacity: 0.7;
+	font-size: 0.85em;
+	line-height: 1;
+	user-select: none;
+}
+/* The bookmark toggle has a "Bookmark" label, so it's padded like the text buttons beside it. */
+.wb-card-expand-toolbar .wb-icon-btn.wb-bookmark-toggle { padding: 2px 7px; }
+.wb-card-expand-toolbar .wb-btn-icon svg,
+.wb-card-expand-toolbar .wb-icon-btn svg { width: 12px; height: 12px; }
 
 /* Inline markdown editor: replaces the rendered preview while an expanded card is being edited. */
 .wb-card-editor {
@@ -460,10 +499,12 @@
 	border-radius: 4px;
 	cursor: text;
 }
+/* No focus ring of its own: the floating card being edited already has the accent border (.wb-card-focus). */
 .wb-card-editor:focus {
-	border-color: var(--interactive-accent);
-	box-shadow: 0 0 0 1px var(--interactive-accent);
+	/* Also overrides Obsidian's own textarea focus border and ring. */
+	border-color: var(--background-modifier-border);
 	outline: none;
+	box-shadow: none;
 }
 
 /* Live Preview mode: raw Properties (frontmatter YAML) box above Obsidian's own editor for the body. */
@@ -502,10 +543,6 @@
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 10px;
 	cursor: text;
-}
-.wb-card-editor-body:focus-within {
-	border-color: var(--interactive-accent);
-	box-shadow: 0 0 0 1px var(--interactive-accent);
 }
 /* Live Preview text is drawn 25% smaller than the main editor: createLivePreviewEditor() sets
    --font-text-size on this box to 75% of the theme's value, and the editor sizes itself from it. */
@@ -668,7 +705,7 @@
 
 /* ─── Bookmarks ─────────────────────────────────────────────────────────── */
 
-/* Icon-only buttons: the title row's Bookmarks button and the bookmark toggle in an expanded card.
+/* Bookmark buttons: the title row's Bookmarks button and the bookmark toggle in an expanded card (both now have a text label).
    Stretched to the height of the text button beside them (Reload / Edit). */
 .wb-icon-btn {
 	justify-content: center;
@@ -681,6 +718,8 @@
 .wb-icon-btn svg { width: 14px; height: 14px; }
 /* In the title row there's no text button to match, so keep it centered beside the title. */
 .wb-header .wb-bookmarks-btn { align-self: center; flex-shrink: 0; }
+/* It has a "Bookmarks" label, so it's padded like a text button. */
+.wb-header .wb-icon-btn.wb-bookmarks-btn { padding: 4px 10px; }
 
 /* Toggled on (entry bookmarked / Bookmarks view open): accent-colored, filled bookmark. */
 .wb-icon-btn.is-bookmarked,
@@ -804,3 +843,80 @@
 	cursor: zoom-in;
 }
 .wb-card .wb-card-expand-body .internal-embed.image-embed { display: inline-block; }
+
+/* ─── Floating expanded card ────────────────────────────────────────────────
+ * An expanded entry (reading or editing inline) is lifted out of the list and fills the sidebar
+ * from just under the section tabs (covering the section header and search bar) to the bottom,
+ * 20px in from each edge (38px at the bottom, clear of a status bar). The --wb-focus-* variables
+ * are set on the root by enterFloat. Everything behind it is dimmed, can't be clicked and
+ * doesn't scroll. Timings match FLOAT_MS in main.ts.
+ */
+.wb-sidebar.wb-has-edit-focus:not(.wb-edit-focus-hidden) .wb-scroll { overflow-y: hidden; }
+.wb-edit-placeholder { flex: 0 0 auto; }
+
+.wb-edit-backdrop {
+	position: absolute;
+	top: var(--wb-focus-area-top, 0);
+	left: 0;
+	right: 0;
+	bottom: 0;
+	z-index: 3;
+	background: var(--background-modifier-cover);
+	opacity: 0;
+	transition: opacity 220ms ease;
+	pointer-events: none;
+}
+.wb-edit-backdrop.is-visible { opacity: 1; pointer-events: auto; }
+.wb-sidebar.wb-edit-focus-hidden .wb-edit-backdrop { display: none; }
+
+.wb-sidebar .wb-card.wb-card-focus {
+	position: absolute;
+	top: var(--wb-focus-top);
+	bottom: var(--wb-focus-bottom);
+	left: var(--wb-focus-left);
+	right: var(--wb-focus-right);
+	z-index: 4;
+	margin: 0;
+	display: flex;
+	flex-direction: column;
+	overflow-y: auto;
+	/* The expanded tint is translucent; lay it over a solid base so the list doesn't show through. */
+	background:
+		linear-gradient(var(--background-modifier-hover), var(--background-modifier-hover)),
+		var(--background-secondary);
+	border-color: var(--interactive-accent);
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.theme-light .wb-sidebar .wb-card.wb-card-focus { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18); }
+.wb-sidebar .wb-card.wb-card-focus.wb-card-focus-animating {
+	overflow: hidden;
+	transition: top 220ms ease, left 220ms ease, width 220ms ease, height 220ms ease;
+}
+
+/* The expand area, and the editor in it, fill the room under the card's title row; the editor
+   scrolls inside itself, so the toolbar (Cancel / Save) stays at the top of the card. */
+.wb-card-focus > .wb-card-expand {
+	flex: 1 1 auto;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+.wb-card-focus .wb-card-editor-wrap {
+	flex: 1 1 auto;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+.wb-card-focus .wb-card-editor-body,
+.wb-card-focus .wb-card-editor-wrap > .wb-card-editor:not(.wb-card-editor-props) {
+	flex: 1 1 auto;
+	min-height: 8em;
+	max-height: none;
+}
+.wb-card-focus .wb-card-expand-toolbar { flex: 0 0 auto; }
+/* Read mode: the note's text fills the card and scrolls inside it (no 60vh cap while floating). */
+.wb-card-focus > .wb-card-expand > .wb-card-expand-body {
+	flex: 1 1 auto;
+	min-height: 0;
+	max-height: none;
+}

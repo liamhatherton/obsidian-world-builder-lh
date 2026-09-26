@@ -64,6 +64,10 @@ function isShip(fm) {
 }
 var IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
 var SIZE_SPEC = /^\d+(x\d+)?$/;
+var SHOW_NAV_BUTTONS = false;
+var FLOAT_GAP = 20;
+var FLOAT_GAP_BOTTOM = FLOAT_GAP + 18;
+var FLOAT_MS = 220;
 var IMAGES_SUBFOLDER = "Images";
 function migratedFolderNames() {
   return [...SECTION_TABS.map((tab) => SECTION_LABELS[tab]), IMAGES_SUBFOLDER];
@@ -413,6 +417,10 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     this.activeEdit = null;
     /** Note path whose editor should open as soon as its card is redrawn (after switching edits triggers a save + redraw). */
     this.pendingEditPath = null;
+    /** The expanded card, floating over the list (see enterFloat). Only one card is expanded at a time. */
+    this.floating = null;
+    /** Set while re-opening a card after a redraw, so it floats straight into place without animating. */
+    this.floatInstantly = false;
     // Rebuilt on every render(); let switchTab() and the nav buttons operate without closures.
     this.tabBarEl = null;
     this.tabContents = {};
@@ -428,6 +436,8 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     /** True while a back/forward navigation is replaying a history entry, so it isn't re-recorded. */
     this.restoringNav = false;
     this.navButtons = [];
+    /** Back / Forward in the expanded card's toolbar; these step between expanded entries only (see navigateCard). */
+    this.cardNavButtons = [];
     this.plugin = plugin;
   }
   getViewType() {
@@ -469,7 +479,9 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     this.treeExpanders = /* @__PURE__ */ new Map();
     (_c = this.activeEdit) == null ? void 0 : _c.abandon();
     this.activeEdit = null;
+    void this.exitFloat(true);
     this.navButtons = [];
+    this.cardNavButtons = [];
     this.bookmarkHeaderButtons = [];
     this.sectionConfigs = {};
     const fixed = containerEl.createDiv("wb-fixed");
@@ -480,7 +492,8 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       cls: "wb-btn-secondary wb-icon-btn wb-bookmarks-btn",
       attr: { type: "button", "aria-label": "Bookmarks" }
     });
-    (0, import_obsidian.setIcon)(bookmarksBtn, "bookmark");
+    (0, import_obsidian.setIcon)(bookmarksBtn.createSpan({ cls: "wb-btn-icon" }), "bookmark");
+    bookmarksBtn.createSpan({ text: "Bookmarks" });
     bookmarksBtn.onclick = () => this.toggleBookmarksView();
     this.bookmarkHeaderButtons.push(bookmarksBtn);
     const tabBar = fixed.createDiv("wb-tabs");
@@ -684,6 +697,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     this.renderBookmarks();
     if (reopen.length) {
       this.restoringNav = true;
+      this.floatInstantly = true;
       try {
         for (const { tab, path } of reopen) {
           const card = (_d = contents[tab]) == null ? void 0 : _d.body.querySelector(`.wb-card[data-path="${CSS.escape(path)}"]`);
@@ -692,6 +706,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
         }
       } finally {
         this.restoringNav = false;
+        this.floatInstantly = false;
       }
       this.refreshCurrentCardHighlight();
     }
@@ -995,26 +1010,29 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     this.createNoResultsLine(container, label);
   }
   /**
-   * A tab's section header (fixed region): Back/Forward and the label on the left; Reload and
-   * (for the entry sections) + New on the right. (The Bookmarks button lives in the title row.)
+   * A tab's section header (fixed region): the label on the left (after Back/Forward, when
+   * SHOW_NAV_BUTTONS is on); Reload and (for the entry sections) + New on the right. (The
+   * Bookmarks button lives in the title row.)
    */
   renderSectionHeader(pane, label, onCreate, reload) {
     const hdr = pane.head.createDiv("wb-section-header");
     const titleGroup = hdr.createDiv("wb-section-title");
-    const navGroup = titleGroup.createDiv("wb-nav-buttons");
-    const backBtn = navGroup.createEl("button", {
-      cls: "wb-nav-btn",
-      text: "<",
-      attr: { type: "button", "aria-label": "Back" }
-    });
-    const fwdBtn = navGroup.createEl("button", {
-      cls: "wb-nav-btn",
-      text: ">",
-      attr: { type: "button", "aria-label": "Forward" }
-    });
-    backBtn.onclick = () => this.navigateBack();
-    fwdBtn.onclick = () => this.navigateForward();
-    this.navButtons.push({ back: backBtn, fwd: fwdBtn });
+    if (SHOW_NAV_BUTTONS) {
+      const navGroup = titleGroup.createDiv("wb-nav-buttons");
+      const backBtn = navGroup.createEl("button", {
+        cls: "wb-nav-btn",
+        text: "<",
+        attr: { type: "button", "aria-label": "Back" }
+      });
+      const fwdBtn = navGroup.createEl("button", {
+        cls: "wb-nav-btn",
+        text: ">",
+        attr: { type: "button", "aria-label": "Forward" }
+      });
+      backBtn.onclick = () => this.navigateBack();
+      fwdBtn.onclick = () => this.navigateForward();
+      this.navButtons.push({ back: backBtn, fwd: fwdBtn });
+    }
     titleGroup.createSpan({ text: label });
     const actions = hdr.createDiv("wb-section-actions");
     if (reload) {
@@ -1326,31 +1344,43 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     return card;
   }
   /**
-   * Expands a card in place to show the note's text (all but the portrait image) instead of opening it in the
-   * editor, so writing in the main pane isn't interrupted. Modify MD in the expanded area opens
-   * the note the normal way; Edit edits its markdown inline. Clicking the card again (or its chevron) collapses it.
+   * Expands a card to show the note's text (all but the portrait image) instead of opening it in the
+   * editor, so writing in the main pane isn't interrupted. The expanded card floats over the list
+   * (see enterFloat), and only one card is expanded at a time: expanding another closes the open
+   * one first. Modify MD opens the note the normal way; Edit edits its markdown inline, still
+   * floating. Clicking the card's title row again (its X) collapses it back into the list.
+   * `force` skips the "Discard changes?" question (already answered).
    */
   toggleCardExpand(tab, card, entry, force = false) {
-    var _a, _b;
+    var _a, _b, _c, _d, _e, _f;
     const wasExpanded = card.classList.contains("wb-card-expanded");
-    const editingThis = ((_a = this.activeEdit) == null ? void 0 : _a.card) === card;
-    if (wasExpanded && !force && editingThis && this.activeEdit.isDirty()) {
+    if (wasExpanded && !force && ((_a = this.activeEdit) == null ? void 0 : _a.card) === card && this.activeEdit.isDirty()) {
       void confirmModal(this.app, "Discard changes?", `Your edits to "${entry.file.basename}" haven't been saved.`, "Discard").then((ok) => {
         if (ok) this.toggleCardExpand(tab, card, entry, true);
       });
       return;
     }
-    if (editingThis) {
-      this.activeEdit.abandon();
-      this.activeEdit = null;
-    }
-    (_b = card.querySelector(":scope > .wb-card-expand")) == null ? void 0 : _b.remove();
-    card.removeClass("wb-card-expanded");
-    card.setAttribute("aria-expanded", "false");
     if (wasExpanded) {
+      this.collapseCard(card, false);
       this.recordNav(tab, null);
       return;
     }
+    const other = (_b = this.floating) == null ? void 0 : _b.card;
+    if (other && other !== card && other.isConnected && other.classList.contains("wb-card-expanded")) {
+      if (!force && ((_c = this.activeEdit) == null ? void 0 : _c.card) === other && this.activeEdit.isDirty()) {
+        const name = (_f = (_e = this.entryByPath.get((_d = other.getAttribute("data-path")) != null ? _d : "")) == null ? void 0 : _e.file.basename) != null ? _f : "this entry";
+        void confirmModal(this.app, "Discard changes?", `Your edits to "${name}" haven't been saved.`, "Discard").then((ok) => {
+          if (ok) this.toggleCardExpand(tab, card, entry, true);
+        });
+        return;
+      }
+    }
+    let switching = false;
+    if (other && other !== card && other.isConnected && other.classList.contains("wb-card-expanded")) {
+      this.collapseCard(other, true);
+      switching = true;
+    }
+    this.enterFloat(card, switching);
     card.addClass("wb-card-expanded");
     card.setAttribute("aria-expanded", "true");
     const expand = card.createDiv("wb-card-expand");
@@ -1359,6 +1389,21 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     expand.onkeydown = (e) => e.stopPropagation();
     const body = expand.createDiv("wb-card-expand-body");
     body.addClass("markdown-rendered");
+    body.addEventListener("contextmenu", (e) => {
+      var _a2;
+      const selection = body.win.getSelection();
+      const text = (_a2 = selection == null ? void 0 : selection.toString()) != null ? _a2 : "";
+      if (!text.trim() || !(selection == null ? void 0 : selection.anchorNode) || !body.contains(selection.anchorNode)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const menu = new import_obsidian.Menu();
+      menu.addItem(
+        (item) => item.setTitle("Copy").setIcon("copy").onClick(() => {
+          void navigator.clipboard.writeText(text).catch(() => new import_obsidian.Notice("Couldn't copy the selection."));
+        })
+      );
+      menu.showAtMouseEvent(e);
+    });
     const portraitMatch = this.findFirstImage(entry.content, entry.file);
     const withoutPortrait = portraitMatch ? entry.content.slice(0, portraitMatch.start) + entry.content.slice(portraitMatch.end) : entry.content;
     const bodyText = stripLeadingHeading(stripFrontmatterBlock(withoutPortrait));
@@ -1379,15 +1424,32 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       const href = (_a2 = link.getAttribute("data-href")) != null ? _a2 : link.getAttribute("href");
       if (href) this.followWikiLink(href, entry.file.path);
     });
-    const footer = expand.createDiv("wb-card-expand-footer");
-    const bookmarkBtn = footer.createEl("button", {
+    const toolbar = createDiv("wb-card-expand-toolbar");
+    body.insertAdjacentElement("beforebegin", toolbar);
+    const leftGroup = toolbar.createDiv("wb-card-expand-left");
+    const navBtn = (label, icon, dir) => {
+      const btn = leftGroup.createEl("button", {
+        cls: "wb-btn-secondary wb-icon-btn wb-card-nav-btn",
+        attr: { type: "button", "aria-label": label }
+      });
+      (0, import_obsidian.setIcon)(btn, icon);
+      btn.onclick = () => this.navigateCard(dir);
+      return btn;
+    };
+    const cardBack = navBtn("Back", "chevron-left", -1);
+    const cardFwd = navBtn("Forward", "chevron-right", 1);
+    this.cardNavButtons.push({ back: cardBack, fwd: cardFwd });
+    this.updateNavButtonStates();
+    leftGroup.createSpan({ cls: "wb-toolbar-sep", text: "|", attr: { "aria-hidden": "true" } });
+    const bookmarkBtn = leftGroup.createEl("button", {
       cls: "wb-btn-secondary wb-icon-btn wb-bookmark-toggle",
       attr: { type: "button", "data-bookmark-path": entry.file.path }
     });
-    (0, import_obsidian.setIcon)(bookmarkBtn, "bookmark");
+    (0, import_obsidian.setIcon)(bookmarkBtn.createSpan({ cls: "wb-btn-icon" }), "bookmark");
+    bookmarkBtn.createSpan({ text: "Bookmark" });
     this.syncBookmarkToggle(bookmarkBtn, this.plugin.settings.bookmarks.includes(entry.file.path));
     bookmarkBtn.onclick = () => void this.toggleBookmark(entry.file.path);
-    const actions = footer.createDiv("wb-card-expand-actions");
+    const actions = toolbar.createDiv("wb-card-expand-actions");
     const showViewActions = () => {
       actions.empty();
       const modifyBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
@@ -1405,7 +1467,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       (0, import_obsidian.setIcon)(cancelBtn.createSpan({ cls: "wb-btn-icon" }), "x");
       cancelBtn.createSpan({ text: "Cancel" });
       cancelBtn.onclick = () => void runExclusive(discard);
-      const saveBtn = actions.createEl("button", { cls: "wb-btn-primary", attr: { type: "button" } });
+      const saveBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
       (0, import_obsidian.setIcon)(saveBtn.createSpan({ cls: "wb-btn-icon" }), "check");
       saveBtn.createSpan({ text: "Save" });
       saveBtn.onclick = () => void runExclusive(finishEditing);
@@ -1440,11 +1502,11 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       showViewActions();
     };
     const startEditing = async () => {
-      var _a2, _b2, _c;
-      const other = this.activeEdit;
-      if (other && other.card !== card) {
+      var _a2, _b2, _c2;
+      const other2 = this.activeEdit;
+      if (other2 && other2.card !== card) {
         this.pendingEditPath = entry.file.path;
-        const ok = await other.finish();
+        const ok = await other2.finish();
         if (!ok || !card.isConnected) {
           if (!ok) this.pendingEditPath = null;
           return;
@@ -1471,7 +1533,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
         save: () => void runExclusive(finishEditing),
         cancel: () => void runExclusive(discard)
       };
-      editor = (_c = this.plugin.settings.inlineEditor === "live" ? createLivePreviewEditor(this.app, this, body, entry.file, original, keys, this.findFirstImage(original, entry.file)) : null) != null ? _c : createRawEditor(body, entry.file, original, keys);
+      editor = (_c2 = this.plugin.settings.inlineEditor === "live" ? createLivePreviewEditor(this.app, this, body, entry.file, original, keys, this.findFirstImage(original, entry.file)) : null) != null ? _c2 : createRawEditor(body, entry.file, original, keys);
       this.activeEdit = {
         card,
         isDirty,
@@ -1536,6 +1598,166 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     this.recordNav(tab, entry.file.path);
   }
   /**
+   * Collapses an expanded card back into its list: closes its inline editor (without saving), removes
+   * the expanded area, and shrinks it from floating back into its place (at once if `instant`).
+   */
+  collapseCard(card, instant) {
+    var _a, _b, _c;
+    if (((_a = this.activeEdit) == null ? void 0 : _a.card) === card) {
+      this.activeEdit.abandon();
+      this.activeEdit = null;
+    }
+    (_b = card.querySelector(":scope > .wb-card-expand")) == null ? void 0 : _b.remove();
+    card.removeClass("wb-card-expanded");
+    card.setAttribute("aria-expanded", "false");
+    if (((_c = this.floating) == null ? void 0 : _c.card) === card) void this.exitFloat(instant);
+  }
+  // ─── Floating card (expanded entry over the list) ──────────────────────────────
+  /**
+   * Floats an expanding card over the list: it covers the list area plus the section header and
+   * search bar, from just under the section tabs to the bottom of the sidebar, inset by FLOAT_GAP
+   * (FLOAT_GAP_BOTTOM at the bottom), with everything behind it dimmed. It stays floating in
+   * read mode and while being edited inline. The card is lifted out of the list (position:
+   * absolute on the view's root) and a placeholder of its height keeps its spot, so nothing below
+   * it moves and exitFloat() can shrink it straight back. Call it before adding the card's
+   * expanded contents: the animation starts from the card's current (collapsed) size. `instant`
+   * skips the animation (used when switching straight from another expanded entry).
+   */
+  enterFloat(card, instant = false) {
+    void this.exitFloat(true);
+    const root = this.containerEl;
+    const pane = card.closest(".wb-tab-body");
+    if (!pane || !card.isConnected) return;
+    const start = this.rectInRoot(card);
+    const placeholder = createDiv("wb-edit-placeholder");
+    placeholder.style.height = `${start.height}px`;
+    card.insertAdjacentElement("beforebegin", placeholder);
+    const backdrop = root.createDiv("wb-edit-backdrop");
+    const observer = new ResizeObserver(() => this.updateFloatBounds());
+    observer.observe(root);
+    const fixed = root.querySelector(".wb-fixed");
+    if (fixed) observer.observe(fixed);
+    const tabBar = root.querySelector(".wb-tabs");
+    if (tabBar) observer.observe(tabBar);
+    this.floating = { card, placeholder, pane, backdrop, observer, draggable: card.getAttribute("draggable") };
+    this.updateFloatBounds();
+    card.setAttribute("draggable", "false");
+    this.setCardChevron(card, "x");
+    root.addClass("wb-has-edit-focus");
+    pane.addClass("wb-edit-focus-pane");
+    card.addClass("wb-card-focus");
+    const paneShown = pane.classList.contains("active");
+    root.toggleClass("wb-edit-focus-hidden", !paneShown);
+    if (instant || this.floatInstantly || !paneShown || this.reducedMotion()) {
+      backdrop.addClass("is-visible");
+      return;
+    }
+    this.setFocusGeometry(card, start);
+    card.addClass("wb-card-focus-animating");
+    void card.offsetWidth;
+    backdrop.addClass("is-visible");
+    this.setFocusGeometry(card, this.focusTarget());
+    window.setTimeout(() => {
+      var _a;
+      if (((_a = this.floating) == null ? void 0 : _a.card) !== card) return;
+      card.removeClass("wb-card-focus-animating");
+      this.setFocusGeometry(card, null);
+    }, FLOAT_MS);
+  }
+  /**
+   * Shrinks the floating card back into its place in the list and restores the list. Resolves
+   * once the animation has finished. `instant` skips the animation (the card is being collapsed
+   * or redrawn); so does a card that's no longer on screen.
+   */
+  async exitFloat(instant = false) {
+    const focus = this.floating;
+    if (!focus) return;
+    this.floating = null;
+    focus.observer.disconnect();
+    const { card, placeholder, pane, backdrop } = focus;
+    const finish = () => {
+      card.removeClass("wb-card-focus", "wb-card-focus-animating");
+      this.setFocusGeometry(card, null);
+      this.setCardChevron(card, "chevron-right");
+      if (focus.draggable === null) card.removeAttribute("draggable");
+      else card.setAttribute("draggable", focus.draggable);
+      placeholder.remove();
+      backdrop.remove();
+      pane.removeClass("wb-edit-focus-pane");
+      this.containerEl.removeClass("wb-has-edit-focus", "wb-edit-focus-hidden");
+    };
+    const visible = card.isConnected && placeholder.isConnected && card.offsetParent !== null;
+    if (instant || !visible || this.reducedMotion()) {
+      finish();
+      return;
+    }
+    const target = this.rectInRoot(placeholder);
+    this.setFocusGeometry(card, this.rectInRoot(card));
+    card.addClass("wb-card-focus-animating");
+    void card.offsetWidth;
+    backdrop.removeClass("is-visible");
+    this.setFocusGeometry(card, target);
+    await new Promise((resolve) => window.setTimeout(resolve, FLOAT_MS));
+    finish();
+  }
+  /** Swaps the icon in a card's title-row chevron (the collapsed arrow, or an X while the card floats). */
+  setCardChevron(card, icon) {
+    const chevron = card.querySelector(":scope > .wb-card-row .wb-card-chevron, :scope > .wb-card-title .wb-card-chevron");
+    if (!chevron) return;
+    chevron.empty();
+    (0, import_obsidian.setIcon)(chevron, icon);
+  }
+  /** Recomputes the edges of the area the floating card fills (CSS variables on the root). */
+  updateFloatBounds() {
+    const root = this.containerEl;
+    const scroll = root.querySelector(".wb-scroll");
+    if (!scroll) return;
+    const r = root.getBoundingClientRect();
+    const sc = scroll.getBoundingClientRect();
+    const cs = getComputedStyle(scroll);
+    const tabs = root.querySelector(".wb-tabs");
+    const top = (tabs ? tabs.getBoundingClientRect().bottom : sc.top) - r.top;
+    root.style.setProperty("--wb-focus-area-top", `${top}px`);
+    root.style.setProperty("--wb-focus-top", `${top + FLOAT_GAP}px`);
+    root.style.setProperty("--wb-focus-bottom", `${r.bottom - sc.bottom + FLOAT_GAP_BOTTOM}px`);
+    root.style.setProperty("--wb-focus-left", `${sc.left - r.left + (parseFloat(cs.paddingLeft) || 0)}px`);
+    root.style.setProperty("--wb-focus-right", `${r.right - sc.right + (parseFloat(cs.paddingRight) || 0)}px`);
+  }
+  /** Where the floating card ends up, in the root's coordinates. */
+  focusTarget() {
+    const root = this.containerEl;
+    const r = root.getBoundingClientRect();
+    const px = (name) => parseFloat(root.style.getPropertyValue(name)) || 0;
+    const top = px("--wb-focus-top");
+    const left = px("--wb-focus-left");
+    return { top, left, width: r.width - left - px("--wb-focus-right"), height: r.height - top - px("--wb-focus-bottom") };
+  }
+  /** An element's box relative to the view's root (the floating card's containing block). */
+  rectInRoot(el) {
+    const r = this.containerEl.getBoundingClientRect();
+    const b = el.getBoundingClientRect();
+    return { top: b.top - r.top, left: b.left - r.left, width: b.width, height: b.height };
+  }
+  /** Pins the card to an explicit box while animating; null goes back to the CSS focus bounds. */
+  setFocusGeometry(card, box) {
+    if (!box) {
+      for (const prop of ["top", "left", "width", "height", "right", "bottom"]) card.style.removeProperty(prop);
+      return;
+    }
+    card.setCssStyles({
+      top: `${box.top}px`,
+      left: `${box.left}px`,
+      width: `${box.width}px`,
+      height: `${box.height}px`,
+      right: "auto",
+      bottom: "auto"
+    });
+  }
+  reducedMotion() {
+    var _a, _b;
+    return (_b = (_a = window.matchMedia) == null ? void 0 : _a.call(window, "(prefers-reduced-motion: reduce)").matches) != null ? _b : false;
+  }
+  /**
    * "Collapse all" for one section, triggered by double-clicking its (already active) tab button:
    * closes every expanded card preview and folds every collapsible group label in the section
    * (group groups on Characters, type groups and Subsidiaries on Groups, every tree label
@@ -1549,15 +1771,9 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     if (!pane) return;
     let closedCard = false;
     pane.body.querySelectorAll(".wb-card.wb-card-expanded").forEach((card) => {
-      var _a2, _b;
-      if (((_a2 = this.activeEdit) == null ? void 0 : _a2.card) === card) {
-        if (this.activeEdit.isDirty()) return;
-        this.activeEdit.abandon();
-        this.activeEdit = null;
-      }
-      (_b = card.querySelector(":scope > .wb-card-expand")) == null ? void 0 : _b.remove();
-      card.removeClass("wb-card-expanded");
-      card.setAttribute("aria-expanded", "false");
+      var _a2;
+      if (((_a2 = this.activeEdit) == null ? void 0 : _a2.card) === card && this.activeEdit.isDirty()) return;
+      this.collapseCard(card, false);
       closedCard = true;
     });
     if (closedCard) this.recordNav(tab, null);
@@ -1588,7 +1804,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
    * navigation history — callers that count as a "navigation" record it themselves via recordNav().
    */
   switchTab(id) {
-    var _a, _b, _c, _d, _e, _f, _g;
+    var _a, _b, _c, _d, _e, _f, _g, _h;
     this.activeTab = id;
     if (id !== "bookmarks") this.lastSectionTab = id;
     (_a = this.tabBarEl) == null ? void 0 : _a.querySelectorAll(".wb-tab").forEach((b) => b.removeClass("active"));
@@ -1599,8 +1815,9 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     });
     (_d = this.tabContents[id]) == null ? void 0 : _d.head.addClass("active");
     (_e = this.tabContents[id]) == null ? void 0 : _e.body.addClass("active");
-    (_f = this.showTabSearchFn) == null ? void 0 : _f.call(this);
-    (_g = this.updateShadowFn) == null ? void 0 : _g.call(this);
+    this.containerEl.toggleClass("wb-edit-focus-hidden", !!this.floating && this.floating.pane !== ((_f = this.tabContents[id]) == null ? void 0 : _f.body));
+    (_g = this.showTabSearchFn) == null ? void 0 : _g.call(this);
+    (_h = this.updateShadowFn) == null ? void 0 : _h.call(this);
     this.updateBookmarkHeaderButtons();
   }
   // ─── Bookmarks ───────────────────────────────────────────────────────────
@@ -1656,6 +1873,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     const scrollEl = this.activeTab === tab ? container.closest(".wb-scroll") : null;
     const scrollTop = (_a = scrollEl == null ? void 0 : scrollEl.scrollTop) != null ? _a : 0;
     container.empty();
+    if (this.floating && !this.floating.card.isConnected) void this.exitFloat(true);
     const entries = this.plugin.settings.bookmarks.map((path) => this.entryByPath.get(path)).filter((e) => !!e);
     if (entries.length === 0) {
       container.createDiv("wb-list").createDiv({
@@ -1708,6 +1926,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     this.applySearch(tab);
     if (wasExpanded.size) {
       this.restoringNav = true;
+      this.floatInstantly = true;
       try {
         container.querySelectorAll(".wb-card").forEach((card) => {
           var _a2;
@@ -1717,6 +1936,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
         });
       } finally {
         this.restoringNav = false;
+        this.floatInstantly = false;
       }
     }
     if (scrollEl) scrollEl.scrollTop = scrollTop;
@@ -1743,7 +1963,32 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       back.toggleAttribute("disabled", !canBack);
       fwd.toggleAttribute("disabled", !canForward);
     }
+    this.cardNavButtons = this.cardNavButtons.filter(({ back }) => back.isConnected);
+    const cardBack = this.cardNavTarget(-1) !== null;
+    const cardFwd = this.cardNavTarget(1) !== null;
+    for (const { back, fwd } of this.cardNavButtons) {
+      back.toggleAttribute("disabled", !cardBack);
+      fwd.toggleAttribute("disabled", !cardFwd);
+    }
     this.refreshCurrentCardHighlight();
+  }
+  /**
+   * The nearest history entry before (-1) or after (1) the current one that has an expanded card,
+   * or null. Entries without one (a tab switch, or a card being closed) are skipped: the card
+   * toolbar's Back / Forward step from one expanded entry to the next.
+   */
+  cardNavTarget(dir) {
+    for (let i = this.navIndex + dir; i >= 0 && i < this.navHistory.length; i += dir) {
+      if (this.navHistory[i].cardPath) return i;
+    }
+    return null;
+  }
+  /** Back / Forward from an expanded card's toolbar: expands the previous / next expanded entry in the history. */
+  navigateCard(dir) {
+    const target = this.cardNavTarget(dir);
+    if (target === null) return;
+    this.navIndex = target;
+    this.applyNavEntry(this.navHistory[target]);
   }
   /**
    * Marks the card at the current point in the nav history (if any) as the "current" one, with an
@@ -1771,10 +2016,19 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     this.applyNavEntry(this.navHistory[this.navIndex]);
   }
   applyNavEntry(entry) {
+    var _a, _b;
     this.restoringNav = true;
     try {
       this.switchTab(entry.tab);
-      if (entry.cardPath) this.revealCard(entry.tab, entry.cardPath);
+      if (entry.cardPath) {
+        this.revealCard(entry.tab, entry.cardPath);
+      } else {
+        const float = this.floating;
+        const onTab = !!float && float.pane === ((_a = this.tabContents[entry.tab]) == null ? void 0 : _a.body);
+        if (float && onTab && !(((_b = this.activeEdit) == null ? void 0 : _b.card) === float.card && this.activeEdit.isDirty())) {
+          this.collapseCard(float.card, false);
+        }
+      }
     } finally {
       this.restoringNav = false;
     }
@@ -1832,10 +2086,10 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       if (tab === this.activeTab) (_d = this.showTabSearchFn) == null ? void 0 : _d.call(this);
     }
     if (!card.classList.contains("wb-card-expanded")) {
+      card.scrollIntoView({ block: "center" });
       const entry = this.entryByPath.get(path);
       if (entry) this.toggleCardExpand(tab, card, entry);
     }
-    card.scrollIntoView({ block: "center", behavior: "smooth" });
   }
   /**
    * Lets an image file be dropped onto a portrait card (collapsed or expanded) to set its
@@ -2171,6 +2425,8 @@ function createLivePreviewEditor(app, parent, anchor, file, text, keys, portrait
     const lineEnd = fullBody.slice(end).match(/^[ \t]*(?:\r?\n|$)(?:[ \t]*\r?\n)*/);
     if (!fullBody.slice(0, start).trim() && lineEnd) lead = fullBody.slice(0, end + lineEnd[0].length);
   }
+  const heading = fullBody.slice(lead.length).match(/^(?:[ \t]*\r?\n)*# [^\r\n]*(?:\r?\n|$)(?:[ \t]*\r?\n)*/);
+  if (heading) lead += heading[0];
   const bodyText = fullBody.slice(lead.length);
   let initialBody = bodyText;
   try {
