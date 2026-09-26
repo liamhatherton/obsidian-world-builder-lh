@@ -770,9 +770,11 @@ class UniverseBuilderView extends ItemView {
 
 		const header = fixed.createDiv("wb-header");
 		header.createEl("h2", { text: "Universe Builder" });
-		// Bookmarks: icon + "Bookmarks" label, anchored to the right of the title. Highlighted while the Bookmarks view is open.
+		// Bookmarks: icon + "Bookmarks" label, anchored to the right of the title (outside the section
+		// header, so it stays usable while an expanded entry floats over the list). Highlighted while
+		// the Bookmarks view is open. Same size as Reload / + New (.wb-header-btn).
 		const bookmarksBtn = header.createEl("button", {
-			cls: "wb-btn-secondary wb-icon-btn wb-bookmarks-btn",
+			cls: "wb-btn-secondary wb-icon-btn wb-bookmarks-btn wb-header-btn",
 			attr: { type: "button", "aria-label": "Bookmarks" },
 		});
 		setIcon(bookmarksBtn.createSpan({ cls: "wb-btn-icon" }), "bookmark");
@@ -968,7 +970,7 @@ class UniverseBuilderView extends ItemView {
 		);
 
 		// Bookmarks last: it reuses the entries and card styles the sections above just loaded.
-		this.renderSectionHeader(bookmarksPane, "Bookmarks", null, true);
+		this.renderSectionHeader(bookmarksPane, null, true);
 		this.renderBookmarks();
 
 		// Re-open the cards that were expanded before the redraw, without adding history entries.
@@ -1178,7 +1180,7 @@ class UniverseBuilderView extends ItemView {
 	) {
 		const container = pane.body;
 		this.sectionConfigs[tab] = { getCard, thumbs: !!opts.thumbs, stackBadge: !!opts.stackBadge };
-		this.renderSectionHeader(pane, label, onCreate, opts.reload ?? true);
+		this.renderSectionHeader(pane, onCreate, opts.reload ?? true);
 
 		const files = getMarkdownFilesIn(this.app, folderPath);
 
@@ -1333,13 +1335,14 @@ class UniverseBuilderView extends ItemView {
 	}
 
 	/**
-	 * A tab's section header (fixed region): the label on the left (after Back/Forward, when
-	 * SHOW_NAV_BUTTONS is on); Reload and (for the entry sections) + New on the right. (The
-	 * Bookmarks button lives in the title row.)
+	 * A tab's section header (fixed region): Back/Forward on the left (only when SHOW_NAV_BUTTONS is
+	 * on); Reload and (for the entry sections) + New on the right, the same size as the title row's
+	 * Bookmarks button (.wb-header-btn). The section's name isn't shown here: the highlighted tab
+	 * above already shows it.
 	 */
-	private renderSectionHeader(pane: TabPane, label: string, onCreate: (() => void) | null, reload: boolean) {
+	private renderSectionHeader(pane: TabPane, onCreate: (() => void) | null, reload: boolean) {
 		const hdr = pane.head.createDiv("wb-section-header");
-		// Back/forward (if shown), then the label, grouped together at the left edge of the header.
+		// Back/forward (if shown) at the left edge of the header.
 		const titleGroup = hdr.createDiv("wb-section-title");
 		if (SHOW_NAV_BUTTONS) {
 			const navGroup = titleGroup.createDiv("wb-nav-buttons");
@@ -1357,10 +1360,10 @@ class UniverseBuilderView extends ItemView {
 			fwdBtn.onclick = () => this.navigateForward();
 			this.navButtons.push({ back: backBtn, fwd: fwdBtn });
 		}
-		titleGroup.createSpan({ text: label });
+
 		const actions = hdr.createDiv("wb-section-actions");
 		if (reload) {
-			const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary" });
+			const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary wb-header-btn" });
 			setIcon(reloadBtn.createSpan({ cls: "wb-btn-icon" }), "refresh-cw");
 			reloadBtn.createSpan({ text: "Reload" });
 			reloadBtn.onclick = async () => {
@@ -1369,7 +1372,7 @@ class UniverseBuilderView extends ItemView {
 			};
 		}
 		if (onCreate) {
-			const btn = actions.createEl("button", { text: "+ New", cls: "wb-btn-secondary" });
+			const btn = actions.createEl("button", { text: "+ New", cls: "wb-btn-secondary wb-header-btn" });
 			btn.onclick = onCreate;
 		}
 	}
@@ -1901,7 +1904,7 @@ class UniverseBuilderView extends ItemView {
 			setIcon(cancelBtn.createSpan({ cls: "wb-btn-icon" }), "x");
 			cancelBtn.createSpan({ text: "Cancel" });
 			cancelBtn.onclick = () => void runExclusive(discard);
-			// Same look as Cancel beside it: the floating card's accent border already stands out.
+			// Same look as Cancel beside it: the floating card already stands out on its own.
 			const saveBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
 			setIcon(saveBtn.createSpan({ cls: "wb-btn-icon" }), "check");
 			saveBtn.createSpan({ text: "Save" });

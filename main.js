@@ -489,7 +489,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     const header = fixed.createDiv("wb-header");
     header.createEl("h2", { text: "Universe Builder" });
     const bookmarksBtn = header.createEl("button", {
-      cls: "wb-btn-secondary wb-icon-btn wb-bookmarks-btn",
+      cls: "wb-btn-secondary wb-icon-btn wb-bookmarks-btn wb-header-btn",
       attr: { type: "button", "aria-label": "Bookmarks" }
     });
     (0, import_obsidian.setIcon)(bookmarksBtn.createSpan({ cls: "wb-btn-icon" }), "bookmark");
@@ -693,7 +693,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       },
       { thumbs: true, expandable: true }
     );
-    this.renderSectionHeader(bookmarksPane, "Bookmarks", null, true);
+    this.renderSectionHeader(bookmarksPane, null, true);
     this.renderBookmarks();
     if (reopen.length) {
       this.restoringNav = true;
@@ -861,7 +861,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     var _a, _b, _c, _d, _e, _f, _g;
     const container = pane.body;
     this.sectionConfigs[tab] = { getCard, thumbs: !!opts.thumbs, stackBadge: !!opts.stackBadge };
-    this.renderSectionHeader(pane, label, onCreate, (_a = opts.reload) != null ? _a : true);
+    this.renderSectionHeader(pane, onCreate, (_a = opts.reload) != null ? _a : true);
     const files = getMarkdownFilesIn(this.app, folderPath);
     if (files.length === 0) {
       container.createDiv("wb-list").createDiv({ cls: "wb-empty", text: `No ${label.toLowerCase()} yet.` });
@@ -1010,11 +1010,12 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     this.createNoResultsLine(container, label);
   }
   /**
-   * A tab's section header (fixed region): the label on the left (after Back/Forward, when
-   * SHOW_NAV_BUTTONS is on); Reload and (for the entry sections) + New on the right. (The
-   * Bookmarks button lives in the title row.)
+   * A tab's section header (fixed region): Back/Forward on the left (only when SHOW_NAV_BUTTONS is
+   * on); Reload and (for the entry sections) + New on the right, the same size as the title row's
+   * Bookmarks button (.wb-header-btn). The section's name isn't shown here: the highlighted tab
+   * above already shows it.
    */
-  renderSectionHeader(pane, label, onCreate, reload) {
+  renderSectionHeader(pane, onCreate, reload) {
     const hdr = pane.head.createDiv("wb-section-header");
     const titleGroup = hdr.createDiv("wb-section-title");
     if (SHOW_NAV_BUTTONS) {
@@ -1033,10 +1034,9 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       fwdBtn.onclick = () => this.navigateForward();
       this.navButtons.push({ back: backBtn, fwd: fwdBtn });
     }
-    titleGroup.createSpan({ text: label });
     const actions = hdr.createDiv("wb-section-actions");
     if (reload) {
-      const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary" });
+      const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary wb-header-btn" });
       (0, import_obsidian.setIcon)(reloadBtn.createSpan({ cls: "wb-btn-icon" }), "refresh-cw");
       reloadBtn.createSpan({ text: "Reload" });
       reloadBtn.onclick = async () => {
@@ -1045,7 +1045,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       };
     }
     if (onCreate) {
-      const btn = actions.createEl("button", { text: "+ New", cls: "wb-btn-secondary" });
+      const btn = actions.createEl("button", { text: "+ New", cls: "wb-btn-secondary wb-header-btn" });
       btn.onclick = onCreate;
     }
   }

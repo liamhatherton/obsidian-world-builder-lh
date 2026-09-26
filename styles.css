@@ -96,12 +96,8 @@
 	align-items: center;
 	gap: 6px;
 }
-.wb-section-title > span {
-	font-size: 0.8em;
-	color: var(--text-muted);
-}
 
-/* Back/forward buttons, to the left of the section label. */
+/* Back/forward buttons (hidden unless SHOW_NAV_BUTTONS), at the left of the section header. */
 .wb-nav-buttons {
 	display: flex;
 	gap: 2px;
@@ -499,7 +495,7 @@
 	border-radius: 4px;
 	cursor: text;
 }
-/* No focus ring of its own: the floating card being edited already has the accent border (.wb-card-focus). */
+/* No focus ring of its own: the floating card being edited already has its (softened) accent border (.wb-card-focus). */
 .wb-card-editor:focus {
 	/* Also overrides Obsidian's own textarea focus border and ring. */
 	border-color: var(--background-modifier-border);
@@ -716,10 +712,21 @@
 }
 .wb-icon-btn:hover { color: var(--text-normal); }
 .wb-icon-btn svg { width: 14px; height: 14px; }
-/* In the title row there's no text button to match, so keep it centered beside the title. */
-.wb-header .wb-bookmarks-btn { align-self: center; flex-shrink: 0; }
-/* It has a "Bookmarks" label, so it's padded like a text button. */
-.wb-header .wb-icon-btn.wb-bookmarks-btn { padding: 4px 10px; }
+/*
+ * Header buttons (Bookmarks in the title row; Reload and + New in the section header): one shared
+ * size. Two-class selectors so they beat Obsidian's `button:not(.clickable-icon)` rule, which sets
+ * a taller fixed height, and .wb-icon-btn's own padding on the Bookmarks button.
+ */
+.wb-sidebar .wb-header-btn {
+	height: auto;
+	align-self: center;
+	flex-shrink: 0;
+	gap: 5px;
+	padding: 4px 10px;
+	font-size: 0.85em;
+	line-height: 1.4;
+}
+.wb-sidebar .wb-header-btn svg { width: 14px; height: 14px; }
 
 /* Toggled on (entry bookmarked / Bookmarks view open): accent-colored, filled bookmark. */
 .wb-icon-btn.is-bookmarked,
@@ -884,8 +891,14 @@
 	background:
 		linear-gradient(var(--background-modifier-hover), var(--background-modifier-hover)),
 		var(--background-secondary);
-	border-color: var(--interactive-accent);
+	/* Accent color at 30% opacity: marks the floating card without a full-strength outline. */
+	border-color: color-mix(in srgb, var(--interactive-accent) 30%, transparent);
 	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+/* Keep that softer border on hover, and when it's the "current" card (which otherwise gets the full accent). */
+.wb-sidebar .wb-card.wb-card-focus:hover,
+.wb-sidebar .wb-card.wb-card-focus.wb-card-current {
+	border-color: color-mix(in srgb, var(--interactive-accent) 30%, transparent);
 }
 .theme-light .wb-sidebar .wb-card.wb-card-focus { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18); }
 .wb-sidebar .wb-card.wb-card-focus.wb-card-focus-animating {
