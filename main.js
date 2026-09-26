@@ -1411,7 +1411,7 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
     body.addEventListener("click", (e) => {
       var _a2;
       const target = e.target;
-      if (target instanceof HTMLImageElement && target.src) {
+      if (target.instanceOf(HTMLImageElement) && target.src) {
         e.preventDefault();
         e.stopPropagation();
         openImageZoom(target.src, target.alt || entry.file.basename);
@@ -3596,7 +3596,7 @@ var UniverseBuilderPlugin = class extends import_obsidian.Plugin {
     }
     if (folder.children.length === 0) {
       try {
-        await this.app.vault.delete(folder);
+        await this.app.fileManager.trashFile(folder);
       } catch (e) {
         console.warn(`Universe Builder: couldn't remove the empty "${folder.path}" folder`, e);
       }

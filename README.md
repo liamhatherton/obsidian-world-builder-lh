@@ -38,6 +38,12 @@ To move later (for example after choosing *don't ask again*), or to get the dele
 Folder paths typed into other plugins or notes, such as a Dataview query on `"World"`, aren't changed by the move.
 - **Sidebar editor** — what the Edit button on an expanded entry opens: **Live Preview** (Obsidian's own editor, the default) or **Raw markdown** (a plain text box holding the whole file, frontmatter included). See [Undocumented Obsidian API](#undocumented-obsidian-api)
 
+## Privacy
+
+- **Clipboard** — the plugin only writes to the clipboard, and only when you right-click selected text in an expanded card's preview and choose **Copy**. It never reads the clipboard
+- **Network** — the plugin makes no network requests
+- **Files outside the vault** — read only when you drop or choose an image for a portrait; the image is copied into the vault and nothing outside it is changed
+
 ## Changes from upstream
 
 Everything below was added or changed in this fork (by liamhatherton), compiled from the commit history.

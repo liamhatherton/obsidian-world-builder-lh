@@ -1836,7 +1836,7 @@ class UniverseBuilderView extends ItemView {
 		// do nothing on their own; jump to the linked note's own card instead of leaving the sidebar.
 		body.addEventListener("click", (e) => {
 			const target = e.target as HTMLElement;
-			if (target instanceof HTMLImageElement && target.src) {
+			if (target.instanceOf(HTMLImageElement) && target.src) {
 				e.preventDefault();
 				e.stopPropagation();
 				openImageZoom(target.src, target.alt || entry.file.basename);
@@ -4312,7 +4312,7 @@ export default class UniverseBuilderPlugin extends Plugin {
 		}
 		if (folder.children.length === 0) {
 			try {
-				await this.app.vault.delete(folder);
+				await this.app.fileManager.trashFile(folder);
 			} catch (e) {
 				console.warn(`Universe Builder: couldn't remove the empty "${folder.path}" folder`, e);
 			}
