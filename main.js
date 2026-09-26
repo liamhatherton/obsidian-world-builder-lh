@@ -315,6 +315,13 @@ var SECTION_LABELS = {
   lore: "Lore",
   timeline: "Timeline"
 };
+var SECTION_SINGULAR = {
+  characters: "Character",
+  locations: "Location",
+  groups: "Group",
+  lore: "Lore",
+  timeline: "Timeline"
+};
 var SEARCH_HINTS = {
   characters: { noun: "characters", tip: "Matches name, group, ship and home" },
   locations: { noun: "locations", tip: "Matches the name and the text of the note" },
@@ -1591,11 +1598,69 @@ var UniverseBuilderView = class extends import_obsidian.ItemView {
       }
     };
     showViewActions();
+    const footer = expand.createDiv("wb-card-expand-footer");
+    const deleteBtn = footer.createEl("button", {
+      cls: "wb-btn-secondary wb-btn-danger wb-card-delete-btn",
+      attr: { type: "button", "aria-label": "Delete entry" }
+    });
+    (0, import_obsidian.setIcon)(deleteBtn.createSpan({ cls: "wb-btn-icon" }), "trash-2");
+    deleteBtn.createSpan({ text: "DELETE" });
+    deleteBtn.onclick = () => void runExclusive(() => this.deleteEntry(card, entry));
     if (this.pendingEditPath === entry.file.path) {
       this.pendingEditPath = null;
       void runExclusive(startEditing);
     }
     this.recordNav(tab, entry.file.path);
+  }
+  /**
+   * The expanded card's DELETE button: asks "Are you sure you want to delete this <Category> entry,
+   * <name>?" and, if confirmed, closes the card and moves the note to the trash (following the
+   * vault's "Deleted files" setting, so it can be restored), then redraws the sidebar.
+   */
+  async deleteEntry(card, entry) {
+    const section = this.findEntryTab(entry.file);
+    const category = section ? SECTION_SINGULAR[section] : "";
+    const name = (entry.fm.name || entry.fm.title || entry.file.basename).trim() || entry.file.basename;
+    const ok = await confirmModal(
+      this.app,
+      "Delete entry?",
+      `Are you sure you want to delete this ${category ? `${category} entry` : "entry"}, ${name}?`,
+      "Delete",
+      true
+    );
+    if (!ok) return;
+    const path = entry.file.path;
+    if (card.isConnected && card.classList.contains("wb-card-expanded")) this.collapseCard(card, true);
+    try {
+      await this.app.fileManager.trashFile(entry.file);
+    } catch (err) {
+      console.error("Universe Builder: delete failed", err);
+      new import_obsidian.Notice(`Couldn't delete "${name}".`);
+      return;
+    }
+    this.forgetNavPath(path);
+    this.recordNav(this.activeTab, null);
+    await this.render();
+    new import_obsidian.Notice(`Deleted "${name}".`);
+  }
+  /** Drops a deleted note from the Back / Forward history, so those buttons can't step to it. */
+  forgetNavPath(path) {
+    const kept = [];
+    let index = 0;
+    this.navHistory.forEach((item, i) => {
+      if (item.cardPath === path) return;
+      const prev = kept[kept.length - 1];
+      if (prev && prev.tab === item.tab && prev.cardPath === item.cardPath) {
+        if (i <= this.navIndex) index = kept.length - 1;
+        return;
+      }
+      kept.push(item);
+      if (i <= this.navIndex) index = kept.length - 1;
+    });
+    if (kept.length === 0) kept.push({ tab: this.activeTab, cardPath: null });
+    this.navHistory = kept;
+    this.navIndex = Math.max(0, Math.min(index, kept.length - 1));
+    this.updateNavButtonStates();
   }
   /**
    * Collapses an expanded card back into its list: closes its inline editor (without saving), removes
@@ -2515,7 +2580,7 @@ function createLivePreviewEditor(app, parent, anchor, file, text, keys, portrait
     }
   };
 }
-function confirmModal(app, title, message, actionLabel) {
+function confirmModal(app, title, message, actionLabel, danger = false) {
   return new Promise((resolve) => {
     let result = false;
     const modal = new import_obsidian.Modal(app);
@@ -2524,7 +2589,7 @@ function confirmModal(app, title, message, actionLabel) {
     const buttons = modal.contentEl.createDiv("wb-confirm-buttons");
     const cancelBtn = buttons.createEl("button", { text: "Cancel", cls: "wb-btn-secondary", attr: { type: "button" } });
     cancelBtn.onclick = () => modal.close();
-    const okBtn = buttons.createEl("button", { text: actionLabel, cls: "wb-btn-primary", attr: { type: "button" } });
+    const okBtn = buttons.createEl("button", { text: actionLabel, cls: danger ? "wb-btn-primary wb-btn-danger" : "wb-btn-primary", attr: { type: "button" } });
     okBtn.onclick = () => {
       result = true;
       modal.close();

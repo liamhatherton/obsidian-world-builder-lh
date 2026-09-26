@@ -442,7 +442,8 @@
 }
 /* Compact buttons (bookmark, Modify MD / Edit, Cancel / Save). Two-class selectors so they beat
    Obsidian's `button:not(.clickable-icon)` rule, which sets a taller fixed height. */
-.wb-card-expand-toolbar .wb-btn-secondary {
+.wb-card-expand-toolbar .wb-btn-secondary,
+.wb-card-expand-footer .wb-btn-secondary {
 	height: auto;
 	gap: 4px;
 	padding: 2px 7px;
@@ -474,7 +475,29 @@
 /* The bookmark toggle has a "Bookmark" label, so it's padded like the text buttons beside it. */
 .wb-card-expand-toolbar .wb-icon-btn.wb-bookmark-toggle { padding: 2px 7px; }
 .wb-card-expand-toolbar .wb-btn-icon svg,
+.wb-card-expand-footer .wb-btn-icon svg,
 .wb-card-expand-toolbar .wb-icon-btn svg { width: 12px; height: 12px; }
+
+/* Bottom of the expanded area: a divider (same token as the toolbar's), then DELETE on the right. */
+.wb-card-expand-footer {
+	display: flex;
+	justify-content: flex-end;
+	margin-top: 10px;
+	padding-top: 10px;
+	border-top: 1px solid var(--wb-expand-divider);
+}
+/* Red buttons: DELETE on an expanded card, and the Delete button of its confirm dialog. */
+.wb-btn-primary.wb-btn-danger,
+.wb-card-expand-footer .wb-btn-danger {
+	background: var(--color-red);
+	color: #fff;
+}
+.wb-btn-primary.wb-btn-danger:hover,
+.wb-card-expand-footer .wb-btn-danger:hover {
+	background: var(--color-red);
+	color: #fff;
+	filter: brightness(1.1);
+}
 
 /* Inline markdown editor: replaces the rendered preview while an expanded card is being edited. */
 .wb-card-editor {

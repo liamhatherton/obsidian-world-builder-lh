@@ -557,6 +557,14 @@ const SECTION_LABELS: Record<SectionTab, string> = {
 	lore: "Lore",
 	timeline: "Timeline",
 };
+/** One entry's category, as named in messages ("Delete this Character entry?"). */
+const SECTION_SINGULAR: Record<SectionTab, string> = {
+	characters: "Character",
+	locations: "Location",
+	groups: "Group",
+	lore: "Lore",
+	timeline: "Timeline",
+};
 
 /** Search bar wording per tab. Characters match on four properties; every other tab matches the note's name and text. */
 const SEARCH_HINTS: Record<WBTab, { noun: string; tip: string }> = {
@@ -2053,6 +2061,17 @@ class UniverseBuilderView extends ItemView {
 
 		showViewActions();
 
+		// Footer: a divider, then a red DELETE button anchored to the right, below the note's text
+		// (or the editor). Sized like the toolbar buttons at the top.
+		const footer = expand.createDiv("wb-card-expand-footer");
+		const deleteBtn = footer.createEl("button", {
+			cls: "wb-btn-secondary wb-btn-danger wb-card-delete-btn",
+			attr: { type: "button", "aria-label": "Delete entry" },
+		});
+		setIcon(deleteBtn.createSpan({ cls: "wb-btn-icon" }), "trash-2");
+		deleteBtn.createSpan({ text: "DELETE" });
+		deleteBtn.onclick = () => void runExclusive(() => this.deleteEntry(card, entry));
+
 		// Switching edits from another card saved (and redrew) the sidebar: open this card's editor now.
 		if (this.pendingEditPath === entry.file.path) {
 			this.pendingEditPath = null;
@@ -2060,6 +2079,61 @@ class UniverseBuilderView extends ItemView {
 		}
 
 		this.recordNav(tab, entry.file.path);
+	}
+
+	/**
+	 * The expanded card's DELETE button: asks "Are you sure you want to delete this <Category> entry,
+	 * <name>?" and, if confirmed, closes the card and moves the note to the trash (following the
+	 * vault's "Deleted files" setting, so it can be restored), then redraws the sidebar.
+	 */
+	private async deleteEntry(card: HTMLElement, entry: NoteEntry) {
+		const section = this.findEntryTab(entry.file);
+		const category = section ? SECTION_SINGULAR[section] : "";
+		const name = (entry.fm.name || entry.fm.title || entry.file.basename).trim() || entry.file.basename;
+		const ok = await confirmModal(
+			this.app,
+			"Delete entry?",
+			`Are you sure you want to delete this ${category ? `${category} entry` : "entry"}, ${name}?`,
+			"Delete",
+			true
+		);
+		if (!ok) return;
+		const path = entry.file.path;
+		// Close the card first (discarding any open inline edits: the note is going anyway).
+		if (card.isConnected && card.classList.contains("wb-card-expanded")) this.collapseCard(card, true);
+		try {
+			await this.app.fileManager.trashFile(entry.file);
+		} catch (err) {
+			console.error("Universe Builder: delete failed", err);
+			new Notice(`Couldn't delete "${name}".`);
+			return;
+		}
+		this.forgetNavPath(path);
+		// Nothing is expanded now: make that the current point in the history.
+		this.recordNav(this.activeTab, null);
+		await this.render();
+		new Notice(`Deleted "${name}".`);
+	}
+
+	/** Drops a deleted note from the Back / Forward history, so those buttons can't step to it. */
+	private forgetNavPath(path: string) {
+		const kept: { tab: WBTab; cardPath: string | null }[] = [];
+		let index = 0;
+		this.navHistory.forEach((item, i) => {
+			if (item.cardPath === path) return;
+			// Skip an entry identical to the one before it (left adjacent by the removal).
+			const prev = kept[kept.length - 1];
+			if (prev && prev.tab === item.tab && prev.cardPath === item.cardPath) {
+				if (i <= this.navIndex) index = kept.length - 1;
+				return;
+			}
+			kept.push(item);
+			if (i <= this.navIndex) index = kept.length - 1;
+		});
+		if (kept.length === 0) kept.push({ tab: this.activeTab, cardPath: null });
+		this.navHistory = kept;
+		this.navIndex = Math.max(0, Math.min(index, kept.length - 1));
+		this.updateNavButtonStates();
 	}
 
 	/**
@@ -3124,7 +3198,7 @@ function createLivePreviewEditor(
 // ─── Modals ──────────────────────────────────────────────────────────────────
 
 /** Small yes/no dialog (used to guard unsaved inline edits). Resolves true only if the action button is clicked. */
-function confirmModal(app: App, title: string, message: string, actionLabel: string): Promise<boolean> {
+function confirmModal(app: App, title: string, message: string, actionLabel: string, danger = false): Promise<boolean> {
 	return new Promise((resolve) => {
 		let result = false;
 		const modal = new Modal(app);
@@ -3133,7 +3207,8 @@ function confirmModal(app: App, title: string, message: string, actionLabel: str
 		const buttons = modal.contentEl.createDiv("wb-confirm-buttons");
 		const cancelBtn = buttons.createEl("button", { text: "Cancel", cls: "wb-btn-secondary", attr: { type: "button" } });
 		cancelBtn.onclick = () => modal.close();
-		const okBtn = buttons.createEl("button", { text: actionLabel, cls: "wb-btn-primary", attr: { type: "button" } });
+		// `danger`: a red action button (e.g. Delete) instead of the accent-colored one.
+		const okBtn = buttons.createEl("button", { text: actionLabel, cls: danger ? "wb-btn-primary wb-btn-danger" : "wb-btn-primary", attr: { type: "button" } });
 		okBtn.onclick = () => { result = true; modal.close(); };
 		modal.onClose = () => resolve(result);
 		modal.open();
