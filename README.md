@@ -19,7 +19,23 @@ A fiction world-building toolkit for Obsidian: characters, locations, groups, lo
 
 Requires Obsidian 1.13.0 or later. Settings are declared with Obsidian's declarative settings API, so both appear in the Settings search box.
 
-- **World folder** — where all world-building notes are stored (default: `World`)
+- **Universe folder** — where all Universe Builder notes are stored (default: `UniverseBuilder`). Changing it doesn't move existing notes
+
+## Moving notes out of the World folder
+
+Earlier versions stored notes in `World/`, the same folder the original World Builder plugin uses. Universe Builder now defaults to `UniverseBuilder/` so the two plugins' notes stay separate.
+
+If a vault has Universe Builder notes in `World/`, the plugin asks once per update what to do:
+
+- **Move to UniverseBuilder/ (recommended)** — moves the `Characters`, `Groups`, `Locations`, `Lore` and `Timeline` folders from `World/` into `UniverseBuilder/`. Anything else in `World/` is left alone. If the move leaves `World/` with no files (empty folders don't count), you're then asked whether to delete it; **Delete** sends it to the trash per Obsidian's *Deleted files* setting, and closing the dialog without choosing asks again next launch. A vault that also has the original plugin's `World/Factions` notes never gets this question. Obsidian keeps links to the moved notes up to date, and the plugin updates its bookmarks, custom ordering and collapsed sections. Files that already exist at the destination are skipped, never overwritten, and listed afterwards
+- **Keep World/, ask again next update** — keeps using `World/` and asks again when the next version is installed
+- **Keep World/, don't ask again** — keeps using `World/` for good
+
+If the World Builder plugin is installed, the prompt warns that it won't see the notes once they're moved. The prompt doesn't appear when the **Universe folder** setting is a custom folder, or when `World/` has no notes in those five folders.
+
+To move later (for example after choosing *don't ask again*), or to get the delete offer back after choosing *Keep*, run **Move notes out of the World folder** from the command palette.
+
+Folder paths typed into other plugins or notes, such as a Dataview query on `"World"`, aren't changed by the move.
 - **Sidebar editor** — what the Edit button on an expanded entry opens: **Live Preview** (Obsidian's own editor, the default) or **Raw markdown** (a plain text box holding the whole file, frontmatter included). See [Undocumented Obsidian API](#undocumented-obsidian-api)
 
 ## Changes from upstream
@@ -28,7 +44,7 @@ Everything below was added or changed in this fork (by liamhatherton), compiled 
 
 ### Sci-fi setting and data model
 
-1. **Factions renamed to Groups.** The tab, folder (`World/Groups`), "New Group" command and modal, and the character `group` field all replace the old faction wording.
+1. **Factions renamed to Groups.** The tab, folder (`Groups`), "New Group" command and modal, and the character `group` field all replace the old faction wording.
 2. **"Magic" lore category renamed to "Tech".**
 3. **New location types:** planet, dwarf planet, moon, station, asteroid, belt and ship, alongside the original city/region/building/landmark/other.
 4. **Optional Ship and Home fields on characters.** Both are in the New Character form and written to the note's frontmatter.
@@ -58,7 +74,7 @@ Everything below was added or changed in this fork (by liamhatherton), compiled 
 19. **Fixed sidebar header.** The title, tabs, section header and search bar stay put while the list below scrolls, with a shadow when the list is scrolled. Scroll position is kept across redraws.
 20. **Improved search.** The search bar sits under each tab's section header, and each tab keeps its own query. Every word typed must match, ignoring case and accents. Characters match on name, group, ship and home, and the other tabs on the name plus the note text. Non-matching cards and empty groups are hidden, a "No … match" line appears when nothing matches, and Esc or the clear button resets the search. On Locations, the parents of a matching entry stay visible.
 21. **Back/Forward navigation.** Back and forward buttons in the section header step through a history of tab switches and expanded cards. The current card gets an accent border.
-22. **Wiki links inside the sidebar.** Clicking a `[[link]]` in an expanded preview jumps to that entry's card: it switches tab, opens collapsed groups, clears a hiding search, then expands and scrolls to the card. Links outside the world folder open normally.
+22. **Wiki links inside the sidebar.** Clicking a `[[link]]` in an expanded preview jumps to that entry's card: it switches tab, opens collapsed groups, clears a hiding search, then expands and scrolls to the card. Links outside the Universe folder open normally.
 23. **Reload button** in the section header, to redraw the sidebar on demand.
 24. **Bookmarks.** Every expanded entry has a bookmark button on the left of its footer (opposite Modify MD / Edit); it turns the accent color when the entry is bookmarked. A Bookmarks button to the left of Reload in each section header swaps the list for a Bookmarks view, with bookmarked entries grouped by section (collapsible and drag-to-reorder). Clicking the button again returns to the last section. Bookmarks are kept in plugin data and follow renames.
 25. **Click-to-zoom photos.** When an entry with a photo is expanded (Characters, Locations, Groups and Bookmarks), hovering the photo shows a magnifier badge in its top-right corner, and clicking it opens the image full-screen. Scroll to zoom, drag to pan, and click or press Esc to close, with no need to open the note first.

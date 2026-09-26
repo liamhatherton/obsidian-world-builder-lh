@@ -637,6 +637,17 @@
 .wb-textarea { width: 100%; resize: vertical; min-height: 70px; }
 .wb-textarea-tall { min-height: 120px; }
 
+/* Folder migration prompt: stacked full-width buttons so the long labels fit on phones too. */
+.wb-migrate-warning { color: var(--text-warning); }
+.wb-migrate-note { color: var(--text-muted); font-size: var(--font-ui-small); }
+.wb-migrate-buttons {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-top: 16px;
+}
+.wb-migrate-buttons button { width: 100%; }
+
 /* ─── Bookmarks ─────────────────────────────────────────────────────────── */
 
 /* Icon-only buttons: the title row's Bookmarks button and the bookmark toggle in an expanded card.
