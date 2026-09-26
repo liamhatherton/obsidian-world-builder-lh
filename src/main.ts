@@ -85,7 +85,8 @@ interface FolderMigrationState {
 const DEFAULT_FOLDER = "UniverseBuilder";
 /**
  * The default before the move to DEFAULT_FOLDER, shared with the World Builder plugin this one
- * was forked from. Only its Characters/Locations/Groups/Lore/Timeline folders are ever moved.
+ * was forked from. Only its Characters/Locations/Groups/Lore/Timeline folders, plus the Images
+ * folder portraits are imported into (see migratedFolderNames), are ever moved.
  */
 const LEGACY_FOLDER = "World";
 /** Plugin id of the original World Builder, only used to warn that moving hides the notes from it. */
@@ -133,7 +134,7 @@ function isShip(fm: Record<string, string>): boolean {
 	return (fm.type ?? "").trim().toLowerCase() === "ship";
 }
 
-/** Extensions treated as "graphics" when filtering images out of note text. */
+/** File extensions treated as images (portraits, dropped files). */
 const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
 
 /** An Obsidian image size spec, as in `![[image.png|300]]` or `![[image.png|300x200]]`. */
@@ -157,6 +158,175 @@ interface PortraitMatch {
 /** An image dragged onto a card: a file already in the vault, or one from outside it (e.g. File Explorer). */
 type DroppedImage = { kind: "vault"; file: TFile } | { kind: "external"; file: File };
 
+/** Subfolder of the Universe Builder folder that portrait images from outside the vault are imported into. */
+const IMAGES_SUBFOLDER = "Images";
+
+/**
+ * Every folder the World/ -> UniverseBuilder/ migration moves: the section folders, plus Images,
+ * because while the Universe folder setting still points at World/, portraits dropped onto
+ * entries are imported into World/Images. Moving it keeps them with the notes, and lets an
+ * otherwise emptied World/ be offered for deletion.
+ */
+function migratedFolderNames(): string[] {
+	return [...SECTION_TABS.map((tab) => SECTION_LABELS[tab]), IMAGES_SUBFOLDER];
+}
+
+function imagesFolderPath(worldFolder: string): string {
+	return normalizePath(`${worldFolder}/${IMAGES_SUBFOLDER}`);
+}
+
+/**
+ * Where a note's imported portrait goes: `<Universe folder>/Images/<Section>` (Characters,
+ * Locations, Groups, Lore or Timeline), taken from the section folder the note lives in, so
+ * same-named images from different sections don't collide. Notes outside a section folder use
+ * Images itself.
+ */
+function portraitFolderFor(worldFolder: string, notePath: string): string {
+	const root = normalizePath(worldFolder);
+	const images = imagesFolderPath(worldFolder);
+	const path = normalizePath(notePath);
+	if (!path.toLowerCase().startsWith(root.toLowerCase() + "/")) return images;
+	const first = path.slice(root.length + 1).split("/")[0].toLowerCase();
+	const section = SECTION_TABS.map((tab) => SECTION_LABELS[tab]).find((label) => label.toLowerCase() === first);
+	return section ? `${images}/${section}` : images;
+}
+
+/** Creates `path` and any missing parent folders. */
+async function ensureFolderPath(app: App, path: string) {
+	let current = "";
+	for (const part of normalizePath(path).split("/")) {
+		current = current ? `${current}/${part}` : part;
+		if (!app.vault.getAbstractFileByPath(current)) await app.vault.createFolder(current);
+	}
+}
+
+/**
+ * The image file being dragged from inside Obsidian (its file list, etc.), or null. Uses
+ * Obsidian's drag manager, which isn't part of the public API, so it's read defensively.
+ */
+function draggedVaultImage(app: App): TFile | null {
+	const draggable = (app as unknown as { dragManager?: { draggable?: { type?: string; file?: unknown; files?: unknown[] } | null } })
+		.dragManager?.draggable;
+	if (!draggable) return null;
+	const candidates = draggable.type === "file" ? [draggable.file] : draggable.type === "files" ? draggable.files ?? [] : [];
+	for (const f of candidates) if (f instanceof TFile && IMG_EXT.test(f.name)) return f;
+	return null;
+}
+
+/**
+ * If a file dropped from outside Obsidian actually lives inside this vault, returns it, so it's
+ * linked where it is instead of being copied in a second time. Desktop only; null otherwise.
+ */
+function vaultFileForDropped(app: App, dropped: File): TFile | null {
+	const adapter = app.vault.adapter;
+	if (!(adapter instanceof FileSystemAdapter)) return null;
+	let osPath = "";
+	try {
+		// Newer Electron dropped File.path in favour of webUtils.getPathForFile().
+		const electron = (window as unknown as { require?: (m: string) => { webUtils?: { getPathForFile?: (f: File) => string } } })
+			.require?.("electron");
+		osPath = electron?.webUtils?.getPathForFile?.(dropped) || (dropped as File & { path?: string }).path || "";
+	} catch {
+		osPath = (dropped as File & { path?: string }).path ?? "";
+	}
+	if (!osPath) return null;
+	const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+	const base = norm(adapter.getBasePath());
+	const full = norm(osPath);
+	if (!full.toLowerCase().startsWith(base.toLowerCase() + "/")) return null;
+	const found = app.vault.getAbstractFileByPath(normalizePath(full.slice(base.length + 1)));
+	return found instanceof TFile ? found : null;
+}
+
+/**
+ * True while an image might be being dragged: a file from outside Obsidian (while dragging only
+ * each item's MIME type is visible, not its name, and some image types have none, so an untyped
+ * file is let through and checked by name on drop) or an image from Obsidian's own file list.
+ * Card reorder drags (application/x-wb-card) never count.
+ */
+function isImageDrag(app: App, e: DragEvent): boolean {
+	const dt = e.dataTransfer;
+	if (!dt || dt.types.includes("application/x-wb-card")) return false;
+	if (dt.types.includes("Files")) {
+		const items = Array.from(dt.items ?? []);
+		return items.length === 0 || items.some((i) => i.kind === "file" && (i.type === "" || i.type.startsWith("image/")));
+	}
+	return draggedVaultImage(app) !== null;
+}
+
+/**
+ * Reads the image out of a drop (call it inside the drop handler: the DataTransfer is emptied
+ * once the handler returns). Shows a notice and returns null if nothing dropped is an image.
+ */
+function droppedImageFrom(app: App, dt: DataTransfer): DroppedImage | null {
+	if (dt.types.includes("Files")) return imageFromFiles(app, Array.from(dt.files));
+	const vaultFile = draggedVaultImage(app);
+	return vaultFile ? { kind: "vault", file: vaultFile } : null;
+}
+
+/** The first image among files picked or dropped from outside Obsidian (see droppedImageFrom). */
+function imageFromFiles(app: App, files: File[]): DroppedImage | null {
+	if (files.length === 0) return null;
+	const picked = files.find((f) => IMG_EXT.test(f.name));
+	if (!picked) {
+		new Notice(files.length === 1 ? `"${files[0].name}" isn't an image.` : "None of those files is an image.");
+		return null;
+	}
+	const inVault = vaultFileForDropped(app, picked);
+	return inVault ? { kind: "vault", file: inVault } : { kind: "external", file: picked };
+}
+
+/** True if two binary buffers hold the same bytes. */
+function sameBytes(a: ArrayBuffer, b: ArrayBuffer): boolean {
+	if (a.byteLength !== b.byteLength) return false;
+	const x = new Uint8Array(a);
+	const y = new Uint8Array(b);
+	for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+	return true;
+}
+
+/**
+ * Copies an image from outside the vault into the note's portrait folder (see portraitFolderFor),
+ * so the note only ever links to a file inside the vault (and the portrait travels with the vault
+ * through any sync method). Keeps the original file name; if a different file in that folder
+ * already has that name, a number is added ("venus 1.webp"). If the very same image was imported
+ * there before, that copy is reused instead of making a duplicate. Name clashes are checked
+ * case-insensitively (Windows/macOS).
+ */
+async function importImage(app: App, worldFolder: string, file: File, notePath: string): Promise<TFile> {
+	const folder = portraitFolderFor(worldFolder, notePath);
+	await ensureFolderPath(app, folder);
+	const data = await file.arrayBuffer();
+	const dot = file.name.lastIndexOf(".");
+	const stem = slugify(dot > 0 ? file.name.slice(0, dot) : file.name) || "image";
+	const ext = (dot > 0 ? file.name.slice(dot + 1) : "png").toLowerCase();
+	const folderObj = app.vault.getAbstractFileByPath(folder);
+	const siblings = new Map<string, TFile>();
+	if (folderObj instanceof TFolder) {
+		for (const child of folderObj.children) if (child instanceof TFile) siblings.set(child.name.toLowerCase(), child);
+	}
+	for (let n = 0; ; n++) {
+		const name = n === 0 ? `${stem}.${ext}` : `${stem} ${n}.${ext}`;
+		const clash = siblings.get(name.toLowerCase());
+		if (!clash) return await app.vault.createBinary(`${folder}/${name}`, data);
+		if (clash.stat.size === data.byteLength && sameBytes(await app.vault.readBinary(clash), data)) return clash;
+	}
+}
+
+/** The embed for a portrait image in `notePath`, following the user's link settings (wiki vs markdown, relative paths, ...). */
+function portraitEmbed(app: App, image: TFile, notePath: string, size = ""): string {
+	const link = app.fileManager.generateMarkdownLink(image, notePath, undefined, size || undefined);
+	return link.startsWith("!") ? link : `!${link}`;
+}
+
+/** Puts `embed` at the very top of a note's body: right after the frontmatter (which has to stay first), before the title heading. */
+function insertAtBodyTop(data: string, embed: string): string {
+	const bodyStart = data.length - stripFrontmatterBlock(data).length;
+	let head = data.slice(0, bodyStart);
+	if (head && !head.endsWith("\n")) head += "\n";
+	return `${head}${embed}\n${data.slice(bodyStart)}`;
+}
+
 /** Strips a leading YAML frontmatter block, if present, from note content. */
 function stripFrontmatterBlock(content: string): string {
 	return content.replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "");
@@ -173,20 +343,6 @@ function stripLeadingHeading(markdown: string): string {
 	lines.shift();
 	while (lines[0] === "") lines.shift();
 	return lines.join("\n");
-}
-
-/**
- * Removes image embeds and tags from markdown text ("text only" previews).
- * Wiki-embeds of non-image files (e.g. `![[Other Note]]`) are left alone.
- */
-function stripGraphics(markdown: string): string {
-	return markdown
-		.replace(/!\[\[([^\]]+)\]\]/g, (match: string, inner: string) => {
-			const target = inner.split("|")[0].split("#")[0].trim();
-			return IMG_EXT.test(target) ? "" : match;
-		})
-		.replace(/!\[[^\]]*\]\((?:<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\)/g, "") // ![alt](path)
-		.replace(/<img\b[^>]*\/?>/gi, ""); // raw <img> tags
 }
 
 /**
@@ -761,7 +917,7 @@ class UniverseBuilderView extends ItemView {
 				meta: fm.category ?? "",
 				badge: fm.category ?? "",
 			}),
-			{ expandable: true }
+			{ thumbs: true, expandable: true }
 		);
 
 		await this.renderSection(
@@ -775,7 +931,7 @@ class UniverseBuilderView extends ItemView {
 				meta: fm.date ?? "",
 				badge: "",
 			}),
-			{ expandable: true }
+			{ thumbs: true, expandable: true }
 		);
 
 		// Bookmarks last: it reuses the entries and card styles the sections above just loaded.
@@ -1512,7 +1668,7 @@ class UniverseBuilderView extends ItemView {
 				});
 			}
 			body = row.createDiv("wb-card-body");
-			// Characters, Locations and Groups (the tabs with portraits): drop an image on the card to set it.
+			// Every section tab has portraits: drop an image on the card to set it.
 			this.enableImageDrop(card, entry, title);
 		}
 		const titleEl = body.createDiv("wb-card-title");
@@ -1550,7 +1706,7 @@ class UniverseBuilderView extends ItemView {
 	}
 
 	/**
-	 * Expands a card in place to show the note's text (no images) instead of opening it in the
+	 * Expands a card in place to show the note's text (all but the portrait image) instead of opening it in the
 	 * editor, so writing in the main pane isn't interrupted. Modify MD in the expanded area opens
 	 * the note the normal way; Edit edits its markdown inline. Clicking the card again (or its chevron) collapses it.
 	 */
@@ -1588,17 +1744,27 @@ class UniverseBuilderView extends ItemView {
 
 		const body = expand.createDiv("wb-card-expand-body");
 		body.addClass("markdown-rendered");
-		// Frontmatter (properties already shown on the card above) and images are both stripped,
-		// plus the leading "# Name" heading the character template opens with, which just
-		// restates the card's own title.
-		const bodyText = stripLeadingHeading(stripFrontmatterBlock(entry.content));
-		const textOnly = stripGraphics(bodyText);
-		void MarkdownRenderer.render(this.app, textOnly, body, entry.file.path, this);
+		// Frontmatter (properties already shown on the card above) and the portrait image (already
+		// the card's thumbnail) are left out, plus the leading "# Name" heading the templates open
+		// with, which just restates the card's own title. Every other image is kept, shown as a
+		// 64px cropped square (see styles.css); clicking one opens it full-screen.
+		const portraitMatch = this.findFirstImage(entry.content, entry.file);
+		const withoutPortrait = portraitMatch
+			? entry.content.slice(0, portraitMatch.start) + entry.content.slice(portraitMatch.end)
+			: entry.content;
+		const bodyText = stripLeadingHeading(stripFrontmatterBlock(withoutPortrait));
+		void MarkdownRenderer.render(this.app, bodyText, body, entry.file.path, this);
 
 		// Wiki-links in the preview (e.g. "Part of: [[Colonia]]") are rendered as clickable text but
 		// do nothing on their own; jump to the linked note's own card instead of leaving the sidebar.
 		body.addEventListener("click", (e) => {
 			const target = e.target as HTMLElement;
+			if (target instanceof HTMLImageElement && target.src) {
+				e.preventDefault();
+				e.stopPropagation();
+				openImageZoom(target.src, target.alt || entry.file.basename);
+				return;
+			}
 			const link = target.closest<HTMLElement>("a.internal-link");
 			if (!link) return;
 			e.preventDefault();
@@ -1656,6 +1822,13 @@ class UniverseBuilderView extends ItemView {
 		 * opening the editor on another card saves and closes this one.
 		 */
 		let editor: InlineEditor | null = null;
+		/** Portrait drop area above the editor, only for an entry that has no portrait yet. */
+		let portrait: { picker: PortraitPicker; holder: HTMLElement } | null = null;
+		const removePortraitPicker = () => {
+			portrait?.picker.destroy();
+			portrait?.holder.remove();
+			portrait = null;
+		};
 		let original = "";
 		let busy = false;
 		/** Runs one editor action at a time, so a double-click can't save or open twice. */
@@ -1664,12 +1837,13 @@ class UniverseBuilderView extends ItemView {
 			busy = true;
 			try { await fn(); } finally { busy = false; }
 		};
-		const isDirty = () => !!editor && editor.isDirty();
+		const isDirty = () => !!editor && (editor.isDirty() || !!portrait?.picker.hasImage);
 
 		const stopEditing = () => {
 			if (this.activeEdit?.card === card) this.activeEdit = null;
 			editor?.destroy();
 			editor = null;
+			removePortraitPicker();
 			body.show();
 			expand.removeClass("is-editing");
 			showViewActions();
@@ -1699,13 +1873,21 @@ class UniverseBuilderView extends ItemView {
 			expand.addClass("is-editing");
 			showEditActions();
 			body.hide();
+			// No portrait yet: offer the same drop area as the New entry forms, above the editor.
+			// The chosen image is only imported when the edits are saved.
+			if (!this.findFirstImage(original, entry.file)) {
+				const holder = createDiv("wb-card-editor-portrait");
+				body.insertAdjacentElement("beforebegin", holder);
+				const picker = new PortraitPicker(this.app, this.plugin, holder, entry.file.parent?.path ?? this.plugin.settings.worldFolder);
+				portrait = { picker, holder };
+			}
 			const keys: InlineEditorKeys = {
 				save: () => void runExclusive(finishEditing),
 				cancel: () => void runExclusive(discard),
 			};
 			editor =
 				(this.plugin.settings.inlineEditor === "live"
-					? createLivePreviewEditor(this.app, this, body, entry.file, original, keys)
+					? createLivePreviewEditor(this.app, this, body, entry.file, original, keys, this.findFirstImage(original, entry.file))
 					: null) ?? createRawEditor(body, entry.file, original, keys);
 			this.activeEdit = {
 				card,
@@ -1717,6 +1899,7 @@ class UniverseBuilderView extends ItemView {
 				abandon: () => {
 					editor?.destroy();
 					editor = null;
+					removePortraitPicker();
 				},
 			};
 			editor.focus();
@@ -1735,20 +1918,26 @@ class UniverseBuilderView extends ItemView {
 			if (!editor) return;
 			if (!isDirty()) { stopEditing(); return; }
 			try {
-				// Don't silently overwrite changes made elsewhere (e.g. in the main editor) since editing began.
-				const current = await this.app.vault.read(entry.file);
-				if (current !== original && !(await confirmModal(
-					this.app,
-					"Note changed elsewhere",
-					`"${entry.file.basename}" was modified outside the sidebar after you started editing. Overwrite it with your version?`,
-					"Overwrite"
-				))) {
-					editor?.focus();
-					return;
+				if (editor.isDirty()) {
+					// Don't silently overwrite changes made elsewhere (e.g. in the main editor) since editing began.
+					const current = await this.app.vault.read(entry.file);
+					if (current !== original && !(await confirmModal(
+						this.app,
+						"Note changed elsewhere",
+						`"${entry.file.basename}" was modified outside the sidebar after you started editing. Overwrite it with your version?`,
+						"Overwrite"
+					))) {
+						editor?.focus();
+						return;
+					}
+					if (!editor) return;
+					await this.app.vault.modify(entry.file, editor.getText());
 				}
-				await this.app.vault.modify(entry.file, editor.getText());
+				// Added after the text is written, so it lands at the top of the saved body.
+				await portrait?.picker.attachTo(entry.file, `Saved "${entry.file.basename}", but its portrait couldn't be imported.`);
+				removePortraitPicker();
 				if (this.activeEdit?.card === card) this.activeEdit = null;
-				editor.destroy();
+				editor?.destroy();
 				editor = null;
 				// Redraw so the card's title/badges/grouping reflect the new frontmatter, then re-open it (in read mode).
 				await this.render({ keepExpanded: true });
@@ -2114,17 +2303,7 @@ class UniverseBuilderView extends ItemView {
 	 * to the editor, and card reorder drags (which carry application/x-wb-card) are ignored.
 	 */
 	private enableImageDrop(card: HTMLElement, entry: NoteEntry, title: string) {
-		const isImageDrag = (e: DragEvent): boolean => {
-			const dt = e.dataTransfer;
-			if (!dt || dt.types.includes("application/x-wb-card")) return false;
-			if (dt.types.includes("Files")) {
-				// While dragging, only each item's MIME type is visible (not its name); some image
-				// types have none, so an untyped file is let through and checked by name on drop.
-				const items = Array.from(dt.items ?? []);
-				return items.length === 0 || items.some((i) => i.kind === "file" && (i.type === "" || i.type.startsWith("image/")));
-			}
-			return this.draggedVaultImage() !== null;
-		};
+		const isImage = (e: DragEvent) => isImageDrag(this.app, e);
 		// Over the open inline editor: let the editor take the drop as it normally would.
 		const overEditor = (e: DragEvent) =>
 			this.activeEdit?.card === card &&
@@ -2133,12 +2312,12 @@ class UniverseBuilderView extends ItemView {
 		const clear = () => card.removeClass("wb-card-image-drop");
 
 		card.addEventListener("dragenter", (e) => {
-			if (!isImageDrag(e) || overEditor(e)) return;
+			if (!isImage(e) || overEditor(e)) return;
 			e.preventDefault();
 			card.addClass("wb-card-image-drop");
 		});
 		card.addEventListener("dragover", (e) => {
-			if (!isImageDrag(e)) return;
+			if (!isImage(e)) return;
 			if (overEditor(e)) { clear(); return; }
 			e.preventDefault();
 			e.stopPropagation();
@@ -2150,25 +2329,10 @@ class UniverseBuilderView extends ItemView {
 		});
 		card.addEventListener("drop", (e) => {
 			clear();
-			if (!isImageDrag(e) || overEditor(e)) return;
+			if (!isImage(e) || overEditor(e)) return;
 			e.preventDefault();
 			e.stopPropagation();
-			const dt = e.dataTransfer!;
-			// Read what was dropped now: the DataTransfer is emptied once this handler returns.
-			let image: DroppedImage | null = null;
-			if (dt.types.includes("Files")) {
-				const files = Array.from(dt.files);
-				const picked = files.find((f) => IMG_EXT.test(f.name));
-				if (!picked) {
-					new Notice(files.length === 1 ? `"${files[0].name}" isn't an image.` : "None of those files is an image.");
-					return;
-				}
-				const inVault = this.vaultFileForDropped(picked);
-				image = inVault ? { kind: "vault", file: inVault } : { kind: "external", file: picked };
-			} else {
-				const vaultFile = this.draggedVaultImage();
-				if (vaultFile) image = { kind: "vault", file: vaultFile };
-			}
+			const image = droppedImageFrom(this.app, e.dataTransfer!);
 			if (!image) return;
 			if (this.activeEdit) {
 				// Saving the portrait redraws the sidebar, which would close the open editor.
@@ -2180,50 +2344,12 @@ class UniverseBuilderView extends ItemView {
 	}
 
 	/**
-	 * The image file being dragged from inside Obsidian (its file list, etc.), or null. Uses
-	 * Obsidian's drag manager, which isn't part of the public API, so it's read defensively.
-	 */
-	private draggedVaultImage(): TFile | null {
-		const draggable = (this.app as unknown as { dragManager?: { draggable?: { type?: string; file?: unknown; files?: unknown[] } | null } })
-			.dragManager?.draggable;
-		if (!draggable) return null;
-		const candidates = draggable.type === "file" ? [draggable.file] : draggable.type === "files" ? draggable.files ?? [] : [];
-		for (const f of candidates) if (f instanceof TFile && IMG_EXT.test(f.name)) return f;
-		return null;
-	}
-
-	/**
-	 * If a file dropped from outside Obsidian actually lives inside this vault, returns it, so it's
-	 * linked where it is instead of being copied in a second time. Desktop only; null otherwise.
-	 */
-	private vaultFileForDropped(dropped: File): TFile | null {
-		const adapter = this.app.vault.adapter;
-		if (!(adapter instanceof FileSystemAdapter)) return null;
-		let osPath = "";
-		try {
-			// Newer Electron dropped File.path in favour of webUtils.getPathForFile().
-			const electron = (window as unknown as { require?: (m: string) => { webUtils?: { getPathForFile?: (f: File) => string } } })
-				.require?.("electron");
-			osPath = electron?.webUtils?.getPathForFile?.(dropped) || (dropped as File & { path?: string }).path || "";
-		} catch {
-			osPath = (dropped as File & { path?: string }).path ?? "";
-		}
-		if (!osPath) return null;
-		const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
-		const base = norm(adapter.getBasePath());
-		const full = norm(osPath);
-		if (!full.toLowerCase().startsWith(base.toLowerCase() + "/")) return null;
-		const found = this.app.vault.getAbstractFileByPath(normalizePath(full.slice(base.length + 1)));
-		return found instanceof TFile ? found : null;
-	}
-
-	/**
 	 * Sets a note's portrait to a dropped image. If the note already embeds a portrait image, asks
 	 * before replacing it (declining changes nothing, and nothing is copied into the vault), then
 	 * swaps that embed for the new one in place, keeping any size spec. Otherwise the embed is
 	 * added at the very top of the note's body (right after the frontmatter, which has to stay first).
-	 * An image from outside the vault is copied into the attachment folder from Obsidian's settings,
-	 * the same as dragging it into the editor does.
+	 * An image from outside the vault is copied into `<Universe folder>/Images/<Section>` (see
+	 * importImage), so the note never points at a file outside the vault.
 	 */
 	private async setPortrait(note: TFile, title: string, image: DroppedImage) {
 		try {
@@ -2246,23 +2372,14 @@ class UniverseBuilderView extends ItemView {
 			if (image.kind === "vault") {
 				imageFile = image.file;
 			} else {
-				const dest = await this.app.fileManager.getAvailablePathForAttachment(image.file.name, note.path);
-				imageFile = await this.app.vault.createBinary(dest, await image.file.arrayBuffer());
+				imageFile = await importImage(this.app, this.plugin.settings.worldFolder, image.file, note.path);
 			}
-			const embedFor = (size: string) => {
-				// Follows the user's link settings (wiki vs markdown links, relative paths, ...).
-				const link = this.app.fileManager.generateMarkdownLink(imageFile, note.path, undefined, size || undefined);
-				return link.startsWith("!") ? link : `!${link}`;
-			};
 
 			await this.app.vault.process(note, (data) => {
 				// Re-located in the current text, in case the note changed while the dialog was open.
 				const current = this.findFirstImage(data, note);
-				if (current) return data.slice(0, current.start) + embedFor(current.size) + data.slice(current.end);
-				const bodyStart = data.length - stripFrontmatterBlock(data).length;
-				let head = data.slice(0, bodyStart);
-				if (head && !head.endsWith("\n")) head += "\n";
-				return `${head}${embedFor("")}\n${data.slice(bodyStart)}`;
+				if (current) return data.slice(0, current.start) + portraitEmbed(this.app, imageFile, note.path, current.size) + data.slice(current.end);
+				return insertAtBodyTop(data, portraitEmbed(this.app, imageFile, note.path));
 			});
 			await this.render({ keepExpanded: true });
 			new Notice(`Portrait ${existing ? "replaced" : "added"} for "${title}".`);
@@ -2517,6 +2634,9 @@ function resolveLivePreviewEditorClass(app: App): LivePreviewEditorClass | null 
  * LIVE PREVIEW EDITOR: Obsidian's own editor (formatting rendered as you type, [[link]] suggestions,
  * editor hotkeys) for the note's body, plus a raw "Properties" box above it for the frontmatter
  * YAML. It edits a copy of the text in memory: nothing is written to the file until Save.
+ * When the portrait embed (`portrait`) is the first thing in the body on its own line (where the
+ * plugin always puts it), that line is held back from the editor, since the card already shows
+ * the portrait, and put back in front of the body on save. Every other image stays in the editor.
  * Returns null if the internal editor can't be created, so the caller can fall back.
  */
 function createLivePreviewEditor(
@@ -2525,7 +2645,8 @@ function createLivePreviewEditor(
 	anchor: HTMLElement,
 	file: TFile,
 	text: string,
-	keys: InlineEditorKeys
+	keys: InlineEditorKeys,
+	portrait: { start: number; end: number } | null = null
 ): InlineEditor | null {
 	const Base = resolveLivePreviewEditorClass(app);
 	if (!Base) return null;
@@ -2535,8 +2656,26 @@ function createLivePreviewEditor(
 	const fm = splitFrontmatter(text);
 	let props: HTMLTextAreaElement | null = null;
 	if (fm) {
-		wrap.createDiv({ cls: "wb-card-editor-label", text: "Properties" });
-		props = createAutoTextarea(wrap, "wb-card-editor wb-card-editor-props", fm.yaml, `Properties of ${file.basename}`, keys);
+		// Collapsed to start with, so the body text is what's in view; the header toggles it open.
+		const toggle = wrap.createEl("button", {
+			cls: "wb-card-editor-label wb-card-editor-props-toggle",
+			attr: { type: "button", "aria-expanded": "false" },
+		});
+		setIcon(toggle.createSpan({ cls: "wb-card-editor-props-chevron" }), "chevron-right");
+		toggle.createSpan({ text: "Properties" });
+		const count = fm.yaml.split(/\r?\n/).filter((line) => /^[^\s#-][^:]*:/.test(line)).length;
+		if (count) toggle.createSpan({ cls: "wb-card-editor-props-count", text: `(${count})` });
+		const box = createAutoTextarea(wrap, "wb-card-editor wb-card-editor-props", fm.yaml, `Properties of ${file.basename}`, keys);
+		box.hide();
+		props = box;
+		toggle.onclick = () => {
+			const open = !box.isShown();
+			box.toggle(open);
+			toggle.setAttribute("aria-expanded", String(open));
+			toggle.toggleClass("is-open", open);
+			// Size it now that it's visible (a hidden textarea has no scroll height).
+			if (open) box.dispatchEvent(new Event("input"));
+		};
 	}
 	const host = wrap.createDiv("wb-card-editor-body");
 	// Draw the editor's text 25% smaller than the main editor (the raw fallback keeps its own size).
@@ -2580,7 +2719,18 @@ function createLivePreviewEditor(
 		},
 	});
 
-	const bodyText = fm ? fm.body : text;
+	const fullBody = fm ? fm.body : text;
+	// The portrait's line, kept out of the editor (see above); "" when it isn't at the top.
+	let lead = "";
+	const bodyOffset = text.length - fullBody.length;
+	if (portrait && portrait.start >= bodyOffset) {
+		const start = portrait.start - bodyOffset;
+		const end = portrait.end - bodyOffset;
+		// The rest of its line plus any blank lines after it, so the editor opens on the title.
+		const lineEnd = fullBody.slice(end).match(/^[ \t]*(?:\r?\n|$)(?:[ \t]*\r?\n)*/);
+		if (!fullBody.slice(0, start).trim() && lineEnd) lead = fullBody.slice(0, end + lineEnd[0].length);
+	}
+	const bodyText = fullBody.slice(lead.length);
 	let initialBody = bodyText;
 	try {
 		class SidebarMarkdownEditor extends Base {
@@ -2630,7 +2780,7 @@ function createLivePreviewEditor(
 	return {
 		getText: () => {
 			if (!bodyChanged() && !propsChanged()) return text;
-			const newBody = bodyChanged() ? getBodyValue() : bodyText;
+			const newBody = lead + (bodyChanged() ? getBodyValue() : bodyText);
 			if (!fm || !props) return newBody;
 			// Emptying the Properties box removes the frontmatter block entirely.
 			if (!props.value.trim()) return newBody;
@@ -2672,9 +2822,163 @@ function confirmModal(app: App, title: string, message: string, actionLabel: str
 	});
 }
 
+/**
+ * The portrait drop area at the top of every New entry form, and above the inline editor of an
+ * expanded entry that has no portrait yet. An image dragged onto it (from outside Obsidian or from
+ * its file list), or picked by clicking it (the only way on mobile), is previewed straight away;
+ * it's imported into `<Universe folder>/Images/<Section>` only when the entry is created or saved,
+ * so cancelling leaves nothing behind in the vault. The embed goes at the very top of the note
+ * (right after its properties), which makes it the entry's portrait.
+ */
+class PortraitPicker {
+	private image: DroppedImage | null = null;
+	private objectUrl: string | null = null;
+	private zone: HTMLElement;
+	private previewImg: HTMLImageElement;
+	private nameEl: HTMLElement;
+
+	/**
+	 * `sectionFolder` is the folder the note is (or will be) in, e.g. "UniverseBuilder/Lore"; it only
+	 * sets which Images subfolder the hint names. `dropGuard` (a modal) also swallows files let go
+	 * anywhere else inside it.
+	 */
+	constructor(
+		private app: App,
+		private plugin: UniverseBuilderPlugin,
+		parent: HTMLElement,
+		sectionFolder: string,
+		dropGuard?: HTMLElement
+	) {
+		const folder = portraitFolderFor(plugin.settings.worldFolder, `${sectionFolder}/_.md`);
+		this.zone = parent.createDiv({
+			cls: "wb-portrait-drop",
+			attr: { role: "button", tabindex: "0", "aria-label": "Portrait: drop an image here, or press Enter to choose one" },
+		});
+		const preview = this.zone.createDiv("wb-portrait-drop-preview");
+		this.previewImg = preview.createEl("img", { attr: { alt: "", draggable: "false" } });
+		setIcon(preview.createDiv("wb-portrait-drop-icon"), "image-plus");
+
+		const text = this.zone.createDiv("wb-portrait-drop-text");
+		text.createDiv({ cls: "wb-portrait-drop-title", text: "Drag and drop an image here to import it into the vault" });
+		this.nameEl = text.createDiv({ cls: "wb-portrait-drop-name" });
+		text.createDiv({ cls: "wb-portrait-drop-hint", text: `Or click to choose a file. It becomes the entry's portrait and is saved to ${folder}/.` });
+
+		const removeBtn = this.zone.createEl("button", {
+			cls: "wb-portrait-drop-remove clickable-icon",
+			attr: { type: "button", "aria-label": "Remove image" },
+		});
+		setIcon(removeBtn, "x");
+		removeBtn.onclick = (e) => { e.stopPropagation(); this.set(null); };
+
+		// Kept outside the zone so its own click event doesn't bubble back into the zone's click handler.
+		const input = parent.createEl("input", {
+			cls: "wb-portrait-drop-input",
+			attr: { type: "file", accept: "image/*,.png,.jpg,.jpeg,.gif,.webp,.svg,.bmp,.avif", tabindex: "-1" },
+		});
+		input.onchange = () => {
+			const picked = imageFromFiles(this.app, Array.from(input.files ?? []));
+			if (picked) this.set(picked);
+			input.value = "";
+		};
+		this.zone.onclick = () => input.click();
+		this.zone.onkeydown = (e) => {
+			if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); }
+		};
+
+		const clear = () => this.zone.removeClass("is-dragover");
+		this.zone.addEventListener("dragenter", (e) => {
+			if (!isImageDrag(this.app, e)) return;
+			e.preventDefault();
+			this.zone.addClass("is-dragover");
+		});
+		this.zone.addEventListener("dragover", (e) => {
+			if (!isImageDrag(this.app, e)) return;
+			e.preventDefault();
+			e.stopPropagation();
+			if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+			this.zone.addClass("is-dragover");
+		});
+		this.zone.addEventListener("dragleave", (e) => {
+			if (!this.zone.contains(e.relatedTarget as Node | null)) clear();
+		});
+		this.zone.addEventListener("drop", (e) => {
+			clear();
+			if (!isImageDrag(this.app, e)) return;
+			e.preventDefault();
+			e.stopPropagation();
+			const image = droppedImageFrom(this.app, e.dataTransfer!);
+			if (image) this.set(image);
+		});
+		// A file let go anywhere else on the form is ignored, rather than handed to the window
+		// (which could try to open it).
+		dropGuard?.addEventListener("dragover", (e) => {
+			if (!e.dataTransfer?.types.includes("Files") || this.zone.contains(e.target as Node)) return;
+			e.preventDefault();
+			e.dataTransfer.dropEffect = "none";
+		});
+		dropGuard?.addEventListener("drop", (e) => {
+			if (e.dataTransfer?.types.includes("Files") && !this.zone.contains(e.target as Node)) e.preventDefault();
+		});
+	}
+
+	/** True once an image has been chosen (and not removed). */
+	get hasImage(): boolean {
+		return this.image !== null;
+	}
+
+	private set(image: DroppedImage | null) {
+		if (this.objectUrl) { URL.revokeObjectURL(this.objectUrl); this.objectUrl = null; }
+		this.image = image;
+		if (!image) {
+			this.previewImg.removeAttribute("src");
+		} else if (image.kind === "vault") {
+			this.previewImg.src = this.app.vault.getResourcePath(image.file);
+		} else {
+			this.objectUrl = URL.createObjectURL(image.file);
+			this.previewImg.src = this.objectUrl;
+		}
+		this.nameEl.setText(image ? (image.kind === "vault" ? `${image.file.name} (already in the vault)` : image.file.name) : "");
+		this.zone.toggleClass("has-image", !!image);
+	}
+
+	/**
+	 * Called once the note exists (or its edits are saved): imports the chosen image (if it came
+	 * from outside the vault) and embeds it at the top of the note. A failure here doesn't undo the
+	 * note itself; `failNotice` says so. Returns true if a portrait was added.
+	 */
+	async attachTo(note: TFile, failNotice: string): Promise<boolean> {
+		const image = this.image;
+		if (!image) return false;
+		try {
+			const imageFile = image.kind === "vault"
+				? image.file
+				: await importImage(this.app, this.plugin.settings.worldFolder, image.file, note.path);
+			await this.app.vault.process(note, (data) => insertAtBodyTop(data, portraitEmbed(this.app, imageFile, note.path)));
+			return true;
+		} catch (err) {
+			console.error("Universe Builder: importing portrait failed", err);
+			new Notice(failNotice);
+			return false;
+		}
+	}
+
+	/** Removes the drop area from the page and releases the preview's temporary URL. */
+	remove() {
+		this.destroy();
+		this.zone.remove();
+	}
+
+	/** Releases the preview's temporary URL (call from the modal's onClose). */
+	destroy() {
+		if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
+		this.objectUrl = null;
+	}
+}
+
 class CharacterModal extends Modal {
 	plugin: UniverseBuilderPlugin;
 	onDone: () => void;
+	portrait: PortraitPicker | null = null;
 	data = {
 		name: "", role: "protagonist", age: "", group: "", ship: "", home: "",
 		physicalDesc: "", personality: "", goals: ""
@@ -2690,6 +2994,7 @@ class CharacterModal extends Modal {
 		const { contentEl } = this;
 		contentEl.addClass("wb-modal");
 		contentEl.createEl("h2", { text: "New Character" });
+		this.portrait = new PortraitPicker(this.app, this.plugin, contentEl, `${this.plugin.settings.worldFolder}/Characters`, this.modalEl);
 
 		new Setting(contentEl).setName("Name").addText((t) => {
 			t.setPlaceholder("Character name").onChange((v) => (this.data.name = v));
@@ -2771,18 +3076,23 @@ class CharacterModal extends Modal {
 			...sectionLines,
 		].join("\n");
 		const file = await createNote(this.app, folder, this.data.name, content);
+		await this.portrait?.attachTo(file, `"${file.basename}" was created, but its portrait couldn't be imported.`);
 		new Notice(`Character "${this.data.name}" created.`);
 		this.close();
 		this.onDone();
 		await this.app.workspace.getLeaf().openFile(file);
 	}
 
-	onClose() { this.contentEl.empty(); }
+	onClose() {
+		this.portrait?.destroy();
+		this.contentEl.empty();
+	}
 }
 
 class LocationModal extends Modal {
 	plugin: UniverseBuilderPlugin;
 	onDone: () => void;
+	portrait: PortraitPicker | null = null;
 	data = {
 		name: "", type: "planet", parent: "", description: "",
 		inhabitants: "", secrets: ""
@@ -2798,6 +3108,7 @@ class LocationModal extends Modal {
 		const { contentEl } = this;
 		contentEl.addClass("wb-modal");
 		contentEl.createEl("h2", { text: "New Location" });
+		this.portrait = new PortraitPicker(this.app, this.plugin, contentEl, `${this.plugin.settings.worldFolder}/Locations`, this.modalEl);
 
 		new Setting(contentEl).setName("Name").addText((t) => {
 			t.setPlaceholder("Location name").onChange((v) => (this.data.name = v));
@@ -2855,18 +3166,23 @@ class LocationModal extends Modal {
 			this.data.secrets || "_None provided._",
 		].join("\n");
 		const file = await createNote(this.app, folder, this.data.name, content);
+		await this.portrait?.attachTo(file, `"${file.basename}" was created, but its portrait couldn't be imported.`);
 		new Notice(`Location "${this.data.name}" created.`);
 		this.close();
 		this.onDone();
 		await this.app.workspace.getLeaf().openFile(file);
 	}
 
-	onClose() { this.contentEl.empty(); }
+	onClose() {
+		this.portrait?.destroy();
+		this.contentEl.empty();
+	}
 }
 
 class GroupModal extends Modal {
 	plugin: UniverseBuilderPlugin;
 	onDone: () => void;
+	portrait: PortraitPicker | null = null;
 	data = {
 		name: "", type: "corporation", subsidiaryOf: "", alignment: "neutral", goals: "", enemies: "", allies: "", description: ""
 	};
@@ -2881,6 +3197,7 @@ class GroupModal extends Modal {
 		const { contentEl } = this;
 		contentEl.addClass("wb-modal");
 		contentEl.createEl("h2", { text: "New Group" });
+		this.portrait = new PortraitPicker(this.app, this.plugin, contentEl, `${this.plugin.settings.worldFolder}/Groups`, this.modalEl);
 
 		new Setting(contentEl).setName("Name").addText((t) => {
 			t.setPlaceholder("Group name").onChange((v) => (this.data.name = v));
@@ -2960,18 +3277,23 @@ class GroupModal extends Modal {
 		if (allyLinks) lines.push(`**Allies:** ${allyLinks}`);
 		lines.push("", "## Goals", this.data.goals || "_None provided._", "", "## Description", this.data.description || "_None provided._");
 		const file = await createNote(this.app, folder, this.data.name, lines.join("\n"));
+		await this.portrait?.attachTo(file, `"${file.basename}" was created, but its portrait couldn't be imported.`);
 		new Notice(`Group "${this.data.name}" created.`);
 		this.close();
 		this.onDone();
 		await this.app.workspace.getLeaf().openFile(file);
 	}
 
-	onClose() { this.contentEl.empty(); }
+	onClose() {
+		this.portrait?.destroy();
+		this.contentEl.empty();
+	}
 }
 
 class LoreModal extends Modal {
 	plugin: UniverseBuilderPlugin;
 	onDone: () => void;
+	portrait: PortraitPicker | null = null;
 	data = { title: "", category: "history", content: "" };
 
 	constructor(app: App, plugin: UniverseBuilderPlugin, onDone: () => void) {
@@ -2984,6 +3306,7 @@ class LoreModal extends Modal {
 		const { contentEl } = this;
 		contentEl.addClass("wb-modal");
 		contentEl.createEl("h2", { text: "New Lore Entry" });
+		this.portrait = new PortraitPicker(this.app, this.plugin, contentEl, `${this.plugin.settings.worldFolder}/Lore`, this.modalEl);
 
 		new Setting(contentEl).setName("Title").addText((t) => {
 			t.setPlaceholder("Entry title").onChange((v) => (this.data.title = v));
@@ -3022,18 +3345,23 @@ class LoreModal extends Modal {
 			this.data.content || "_No content yet._",
 		].join("\n");
 		const file = await createNote(this.app, folder, this.data.title, content);
+		await this.portrait?.attachTo(file, `"${file.basename}" was created, but its portrait couldn't be imported.`);
 		new Notice(`Lore entry "${this.data.title}" created.`);
 		this.close();
 		this.onDone();
 		await this.app.workspace.getLeaf().openFile(file);
 	}
 
-	onClose() { this.contentEl.empty(); }
+	onClose() {
+		this.portrait?.destroy();
+		this.contentEl.empty();
+	}
 }
 
 class TimelineModal extends Modal {
 	plugin: UniverseBuilderPlugin;
 	onDone: () => void;
+	portrait: PortraitPicker | null = null;
 	data = { date: "", title: "", description: "", characters: "", locations: "" };
 
 	constructor(app: App, plugin: UniverseBuilderPlugin, onDone: () => void) {
@@ -3046,6 +3374,7 @@ class TimelineModal extends Modal {
 		const { contentEl } = this;
 		contentEl.addClass("wb-modal");
 		contentEl.createEl("h2", { text: "New Timeline Event" });
+		this.portrait = new PortraitPicker(this.app, this.plugin, contentEl, `${this.plugin.settings.worldFolder}/Timeline`, this.modalEl);
 
 		new Setting(contentEl).setName("Date / Era").addText((t) => {
 			t.setPlaceholder("e.g. Year 342 AE").onChange((v) => (this.data.date = v));
@@ -3090,13 +3419,17 @@ class TimelineModal extends Modal {
 		if (locLinks) lines.push(`**Locations:** ${locLinks}`);
 		lines.push("", "## Description", this.data.description || "_None provided._");
 		const file = await createNote(this.app, folder, filename, lines.join("\n"));
+		await this.portrait?.attachTo(file, `"${file.basename}" was created, but its portrait couldn't be imported.`);
 		new Notice(`Timeline event "${this.data.title}" created.`);
 		this.close();
 		this.onDone();
 		await this.app.workspace.getLeaf().openFile(file);
 	}
 
-	onClose() { this.contentEl.empty(); }
+	onClose() {
+		this.portrait?.destroy();
+		this.contentEl.empty();
+	}
 }
 
 // ─── Folder migration prompt ──────────────────────────────────────────────────
@@ -3139,7 +3472,7 @@ class FolderMigrationModal extends Modal {
 		});
 		contentEl.createEl("p", {
 			text:
-				`Moving only covers the Characters, Groups, Locations, Lore and Timeline folders in "${source}/". ` +
+				`Moving only covers the Characters, Groups, Locations, Lore, Timeline and ${IMAGES_SUBFOLDER} folders in "${source}/". ` +
 				`Found: ${found}, ${total} file${total === 1 ? "" : "s"} in all. ` +
 				`Anything else in "${source}/" stays where it is. Links between notes keep working.`,
 		});
@@ -3416,7 +3749,9 @@ export default class UniverseBuilderPlugin extends Plugin {
 
 			const legacy = this.findLegacyFolder();
 			const sections = legacy ? this.legacySections(legacy) : [];
-			if (!legacy || !sections.length) {
+			// World/Images alone isn't a reason to prompt: it only moves along with notes, since a vault
+			// shared with the original World Builder may keep its own images there.
+			if (!legacy || !sections.some((sec) => sec.label !== IMAGES_SUBFOLDER)) {
 				if (manual && state.status === "moved" && legacy && !this.hasFiles(legacy)) {
 					// Already moved, and World/ is still sitting there empty: offer to delete it again.
 					await this.offerLegacyCleanup();
@@ -3468,11 +3803,13 @@ export default class UniverseBuilderPlugin extends Plugin {
 		return null;
 	}
 
-	/** The section folders inside `root` that hold at least one file (any type), with those files. */
+	/**
+	 * The folders the migration moves (see migratedFolderNames) that exist inside `root` and hold
+	 * at least one file (any type), with those files.
+	 */
 	private legacySections(root: TFolder): { label: string; folder: TFolder; files: TFile[] }[] {
 		const out: { label: string; folder: TFolder; files: TFile[] }[] = [];
-		for (const tab of SECTION_TABS) {
-			const label = SECTION_LABELS[tab];
+		for (const label of migratedFolderNames()) {
 			const folder = root.children.find(
 				(c): c is TFolder => c instanceof TFolder && c.name.toLowerCase() === label.toLowerCase()
 			);
@@ -3508,11 +3845,11 @@ export default class UniverseBuilderPlugin extends Plugin {
 	}
 
 	/**
-	 * Moves each section folder from the legacy folder into DEFAULT_FOLDER. A section whose
+	 * Moves each migrated folder (sections and Images) from the legacy folder into DEFAULT_FOLDER. One whose
 	 * destination doesn't exist yet is moved as one folder; otherwise (or if that fails) it's moved
 	 * file by file, skipping any file that already exists at the destination. Nothing is ever
 	 * overwritten or deleted, apart from folders left empty by the move. Obsidian's file manager
-	 * does the moving, so links to the moved notes are updated per the user's settings.
+	 * does the moving, so links to the moved notes and portrait images are updated per the user's settings.
 	 */
 	private async moveLegacyFolder() {
 		const state = this.settings.folderMigration;

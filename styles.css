@@ -304,7 +304,7 @@
 .wb-list > .wb-drop-before { box-shadow: 0 -3px 0 0 var(--interactive-accent); }
 .wb-list > .wb-drop-after { box-shadow: 0 3px 0 0 var(--interactive-accent); }
 
-/* An image file dragged over a portrait card (Characters / Locations / Groups): dropping sets its portrait. */
+/* An image file dragged over a portrait card (any section tab): dropping sets its portrait. */
 .wb-card.wb-card-image-drop {
 	border-color: var(--interactive-accent);
 	box-shadow: 0 0 0 2px var(--interactive-accent);
@@ -476,6 +476,24 @@
 	color: var(--text-muted);
 }
 .wb-card-editor.wb-card-editor-props { min-height: 3em; max-height: 30vh; border-radius: 0; }
+/* The Properties header is a toggle: collapsed when editing starts, chevron turns when open. */
+.wb-card-editor-props-toggle {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	align-self: flex-start;
+	height: auto;
+	padding: 2px 4px 2px 0;
+	background: none;
+	box-shadow: none;
+	border: none;
+	cursor: pointer;
+}
+.wb-card-editor-props-toggle:hover { color: var(--text-normal); background: none; }
+.wb-card-editor-props-chevron { display: inline-flex; transition: transform 0.12s ease; }
+.wb-card-editor-props-chevron svg { width: 12px; height: 12px; }
+.wb-card-editor-props-toggle.is-open .wb-card-editor-props-chevron { transform: rotate(90deg); }
+.wb-card-editor-props-count { font-weight: normal; letter-spacing: 0; }
 .wb-card-editor-body {
 	min-height: 8em;
 	max-height: 60vh;
@@ -686,3 +704,103 @@
 	font-weight: 400;
 	color: var(--text-faint);
 }
+
+/* ─── New entry forms: portrait drop area ───────────────────────────────── */
+
+/* Sits above the form fields (and above the inline editor of an entry with no portrait). Dashed
+   while empty; shows a preview and the file name once an image is chosen. */
+.wb-portrait-drop {
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin: 4px 0 12px;
+	padding: 12px;
+	border: 2px dashed var(--background-modifier-border-hover);
+	border-radius: 10px;
+	background: var(--background-secondary);
+	cursor: pointer;
+	transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+.wb-portrait-drop:hover,
+.wb-portrait-drop:focus-visible { border-color: var(--interactive-accent); outline: none; }
+.wb-portrait-drop.is-dragover {
+	border-color: var(--interactive-accent);
+	border-style: solid;
+	background: var(--background-modifier-hover);
+}
+.wb-portrait-drop.has-image { border-style: solid; }
+
+/* Same square crop as the card thumbnails. */
+.wb-portrait-drop-preview {
+	position: relative;
+	flex: 0 0 64px;
+	width: 64px;
+	height: 64px;
+	border-radius: 8px;
+	overflow: hidden;
+	background: var(--background-primary);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--text-muted);
+}
+.wb-portrait-drop-preview img {
+	display: none;
+	width: 100%;
+	height: 100%;
+	max-width: none;
+	object-fit: cover;
+}
+.wb-portrait-drop.has-image .wb-portrait-drop-preview img { display: block; }
+.wb-portrait-drop.has-image .wb-portrait-drop-icon { display: none; }
+.wb-portrait-drop-icon svg { width: 26px; height: 26px; }
+
+.wb-portrait-drop-text { flex: 1; min-width: 0; }
+.wb-portrait-drop-title { font-weight: var(--font-semibold); }
+.wb-portrait-drop-name {
+	margin-top: 2px;
+	color: var(--text-accent);
+	font-size: var(--font-ui-small);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.wb-portrait-drop-name:empty { display: none; }
+.wb-portrait-drop-hint {
+	margin-top: 2px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.wb-portrait-drop-remove {
+	display: none;
+	align-self: flex-start;
+}
+.wb-portrait-drop.has-image .wb-portrait-drop-remove { display: flex; }
+.wb-portrait-drop-input { display: none; }
+
+/* In an expanded card's inline editor the drop area sits right above the Properties toggle. */
+.wb-card-editor-portrait .wb-portrait-drop { margin: 0 0 8px; padding: 8px; gap: 10px; }
+.wb-card-editor-portrait .wb-portrait-drop-preview { flex-basis: 48px; width: 48px; height: 48px; }
+.wb-card-editor-portrait .wb-portrait-drop-title { font-size: var(--font-ui-small); }
+
+/*
+ * Images in an expanded card's read-only preview (the portrait itself is left out, since it's the
+ * card's thumbnail): cropped 64px squares so they don't fill the sidebar. Click one to view it
+ * full-screen. Overrides any size spec on the embed (|300).
+ */
+.wb-card .wb-card-expand-body.markdown-rendered img {
+	display: inline-block;
+	width: 64px;
+	height: 64px;
+	max-width: none;
+	max-height: none;
+	margin: 2px 4px 2px 0;
+	object-fit: cover;
+	object-position: center;
+	border-radius: 6px;
+	vertical-align: top;
+	cursor: zoom-in;
+}
+.wb-card .wb-card-expand-body .internal-embed.image-embed { display: inline-block; }
