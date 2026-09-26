@@ -20,6 +20,8 @@ import {
 	WorkspaceLeaf,
 } from "obsidian";
 import type { MarkdownFileInfo, SettingDefinitionItem } from "obsidian";
+import { t, tn, setLanguage, detectLocale, displayValue, optionLabel, LANGUAGE_NAMES, LOCALES } from "./i18n";
+import type { LanguageSetting, TranslationKey } from "./i18n";
 
 /**
  * Markdown files inside `folderPath` (recursively), found by walking that folder only,
@@ -62,6 +64,8 @@ interface UniverseBuilderSettings {
 	inlineEditor: "live" | "raw";
 	/** Outcome of the one-time move of the section folders out of the legacy "World" folder. */
 	folderMigration: FolderMigrationState;
+	/** Display language: "auto" follows Obsidian's own language (see i18n.ts), otherwise a fixed one. */
+	language: LanguageSetting;
 }
 /**
  * Where the World -> UniverseBuilder folder move stands. `status` unset means "not settled yet":
@@ -111,17 +115,18 @@ const DEFAULT_SETTINGS: UniverseBuilderSettings = {
 	collapsedBookmarkGroups: [],
 	inlineEditor: "live",
 	folderMigration: {},
+	language: "auto",
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Group "type" property values, in the order their groups appear on the Groups tab. */
-const GROUP_TYPES: { key: string; label: string }[] = [
-	{ key: "corporation", label: "Corporation" },
-	{ key: "government", label: "Government" },
-	{ key: "military", label: "Military" },
-	{ key: "criminal", label: "Criminal" },
-];
+/** Group "type" property values, in the order their groups appear on the Groups tab (shown via optionLabel("groupType", ...)). */
+const GROUP_TYPES = ["corporation", "government", "military", "criminal"];
+/** Stored option values for the New entry forms' dropdowns (their labels come from i18n.ts). */
+const CHARACTER_ROLES = ["protagonist", "antagonist", "supporting", "minor"];
+const LOCATION_TYPES = ["planet", "dwarf planet", "moon", "station", "asteroid", "belt", "ship", "city", "region", "building", "landmark", "other"];
+const GROUP_ALIGNMENTS = ["lawful", "neutral", "chaotic"];
+const LORE_CATEGORIES = ["history", "tech", "religion", "culture", "other"];
 
 function slugify(s: string) {
 	return s.replace(/[/\\:*?"<>|#^[\]]/g, "-").trim();
@@ -184,7 +189,7 @@ const IMAGES_SUBFOLDER = "Images";
  * otherwise emptied World/ be offered for deletion.
  */
 function migratedFolderNames(): string[] {
-	return [...SECTION_TABS.map((tab) => SECTION_LABELS[tab]), IMAGES_SUBFOLDER];
+	return [...SECTION_TABS.map((tab) => SECTION_FOLDERS[tab]), IMAGES_SUBFOLDER];
 }
 
 function imagesFolderPath(worldFolder: string): string {
@@ -203,7 +208,7 @@ function portraitFolderFor(worldFolder: string, notePath: string): string {
 	const path = normalizePath(notePath);
 	if (!path.toLowerCase().startsWith(root.toLowerCase() + "/")) return images;
 	const first = path.slice(root.length + 1).split("/")[0].toLowerCase();
-	const section = SECTION_TABS.map((tab) => SECTION_LABELS[tab]).find((label) => label.toLowerCase() === first);
+	const section = SECTION_TABS.map((tab) => SECTION_FOLDERS[tab]).find((label) => label.toLowerCase() === first);
 	return section ? `${images}/${section}` : images;
 }
 
@@ -285,7 +290,7 @@ function imageFromFiles(app: App, files: File[]): DroppedImage | null {
 	if (files.length === 0) return null;
 	const picked = files.find((f) => IMG_EXT.test(f.name));
 	if (!picked) {
-		new Notice(files.length === 1 ? `"${files[0].name}" isn't an image.` : "None of those files is an image.");
+		new Notice(files.length === 1 ? t("notice.notAnImage", { name: files[0].name }) : t("notice.noImages"));
 		return null;
 	}
 	const inVault = vaultFileForDropped(app, picked);
@@ -370,7 +375,7 @@ function stripLeadingHeading(markdown: string): string {
 function openImageZoom(src: string, alt: string) {
 	document.querySelector(".wb-zoom-overlay")?.remove();
 
-	const overlay = document.body.createDiv({ cls: "wb-zoom-overlay", attr: { role: "dialog", "aria-modal": "true", "aria-label": alt || "Image" } });
+	const overlay = document.body.createDiv({ cls: "wb-zoom-overlay", attr: { role: "dialog", "aria-modal": "true", "aria-label": alt || t("card.image") } });
 	const img = overlay.createEl("img", { cls: "wb-zoom-img", attr: { src, alt, draggable: "false" } });
 
 	let scale = 1;
@@ -535,7 +540,10 @@ interface TabPane { head: HTMLElement; body: HTMLElement; }
 type CardFn = (fm: Record<string, string>) => {
 	title: string;
 	meta: string;
+	/** Stored value behind the badge (sets its color class, e.g. wb-badge-protagonist). */
 	badge: string;
+	/** What the badge says, if different from `badge` (a translated stored value). */
+	badgeText?: string;
 	search?: string;
 	// Additional small labels drawn after the main badge (e.g. the character POV marker).
 	extraBadges?: { text: string; cls: string }[];
@@ -550,30 +558,17 @@ type SectionTab = "characters" | "locations" | "groups" | "lore" | "timeline";
 /** Everything the sidebar can show: a section, or the Bookmarks view (opened from the section header, not the tab bar). */
 type WBTab = SectionTab | "bookmarks";
 const SECTION_TABS: SectionTab[] = ["characters", "locations", "groups", "lore", "timeline"];
-const SECTION_LABELS: Record<SectionTab, string> = {
+/**
+ * Each section's folder name inside the Universe folder. These are data, not display text: they
+ * stay in English whatever the display language, so switching language never loses notes. The
+ * tab labels shown in the sidebar come from i18n.ts ("tab.<section>").
+ */
+const SECTION_FOLDERS: Record<SectionTab, string> = {
 	characters: "Characters",
 	locations: "Locations",
 	groups: "Groups",
 	lore: "Lore",
 	timeline: "Timeline",
-};
-/** One entry's category, as named in messages ("Delete this Character entry?"). */
-const SECTION_SINGULAR: Record<SectionTab, string> = {
-	characters: "Character",
-	locations: "Location",
-	groups: "Group",
-	lore: "Lore",
-	timeline: "Timeline",
-};
-
-/** Search bar wording per tab. Characters match on four properties; every other tab matches the note's name and text. */
-const SEARCH_HINTS: Record<WBTab, { noun: string; tip: string }> = {
-	characters: { noun: "characters", tip: "Matches name, group, ship and home" },
-	locations: { noun: "locations", tip: "Matches the name and the text of the note" },
-	groups: { noun: "groups", tip: "Matches the name and the text of the note" },
-	lore: { noun: "lore", tip: "Matches the title and the text of the note" },
-	timeline: { noun: "timeline", tip: "Matches the title and the text of the note" },
-	bookmarks: { noun: "bookmarks", tip: "Matches each bookmark the same way its own tab does" },
 };
 
 /**
@@ -783,21 +778,15 @@ class UniverseBuilderView extends ItemView {
 		// the Bookmarks view is open. Same size as Reload / + New (.wb-header-btn).
 		const bookmarksBtn = header.createEl("button", {
 			cls: "wb-btn-secondary wb-icon-btn wb-bookmarks-btn wb-header-btn",
-			attr: { type: "button", "aria-label": "Bookmarks" },
+			attr: { type: "button", "aria-label": t("bookmarks") },
 		});
 		setIcon(bookmarksBtn.createSpan({ cls: "wb-btn-icon" }), "bookmark");
-		bookmarksBtn.createSpan({ text: "Bookmarks" });
+		bookmarksBtn.createSpan({ text: t("bookmarks") });
 		bookmarksBtn.onclick = () => this.toggleBookmarksView();
 		this.bookmarkHeaderButtons.push(bookmarksBtn);
 
 		const tabBar = fixed.createDiv("wb-tabs");
-		const tabs: { id: SectionTab; label: string }[] = [
-			{ id: "characters", label: "Characters" },
-			{ id: "locations", label: "Locations" },
-			{ id: "groups", label: "Groups" },
-			{ id: "lore", label: "Lore" },
-			{ id: "timeline", label: "Timeline" },
-		];
+		const tabs: { id: SectionTab; label: string }[] = SECTION_TABS.map((id) => ({ id, label: t(`tab.${id}`) }));
 
 		this.tabBarEl = tabBar;
 		const contents: Partial<Record<WBTab, TabPane>> = {};
@@ -847,16 +836,16 @@ class UniverseBuilderView extends ItemView {
 		});
 		const clearBtn = searchBox.createEl("button", {
 			cls: "wb-search-clear",
-			attr: { type: "button", "aria-label": "Clear search" },
+			attr: { type: "button", "aria-label": t("search.clear") },
 		});
 		setIcon(clearBtn, "x");
 		const syncClear = () => clearBtn.classList.toggle("is-visible", searchInput.value.length > 0);
 		const showTabSearch = () => {
-			const hint = SEARCH_HINTS[this.activeTab];
+			const label = t(`search.${this.activeTab}`);
 			searchInput.value = this.searchQueries[this.activeTab];
-			searchInput.setAttribute("placeholder", `Search ${hint.noun}\u2026`);
-			searchInput.setAttribute("title", hint.tip);
-			searchInput.setAttribute("aria-label", `Search ${hint.noun}`);
+			searchInput.setAttribute("placeholder", `${label}\u2026`);
+			searchInput.setAttribute("title", t(`search.tip.${this.activeTab}`));
+			searchInput.setAttribute("aria-label", label);
 			syncClear();
 		};
 		// Shadow under the fixed region while the list is scrolled, so it reads as sitting on top of it.
@@ -892,19 +881,19 @@ class UniverseBuilderView extends ItemView {
 		await this.renderSection(
 			"characters",
 			contents.characters!,
-			`${folder}/Characters`,
-			"Characters",
+			`${folder}/${SECTION_FOLDERS.characters}`,
 			() => new CharacterModal(this.app, this.plugin, () => void this.render()).open(),
 			(fm) => ({
-				title: fm.name ?? "Unnamed",
+				title: fm.name ?? t("card.unnamed"),
 				// Two lines: age/home, then group/ship (a line with no values is dropped).
 				meta: [
-					labeledLine([["Age", fm.age], ["Home", fm.home]]),
-					labeledLine([["Group", fm.group], ["Ship", fm.ship]]),
+					labeledLine([[t("card.age"), fm.age], [t("card.home"), fm.home]]),
+					labeledLine([[t("card.group"), fm.group], [t("card.ship"), fm.ship]]),
 				].filter(Boolean).join("\n"),
 				badge: fm.role ?? "",
+				badgeText: displayValue("role", fm.role ?? ""),
 				// `pov` is set by hand in the note's properties (not in the New Character modal).
-				extraBadges: hasValue(fm.pov) ? [{ text: "POV", cls: "wb-badge-pov" }] : [],
+				extraBadges: hasValue(fm.pov) ? [{ text: t("card.pov"), cls: "wb-badge-pov" }] : [],
 				// What the search bar matches against.
 				search: [fm.name, fm.group, fm.ship, fm.home].filter(Boolean).join(" "),
 			}),
@@ -914,14 +903,14 @@ class UniverseBuilderView extends ItemView {
 		await this.renderSection(
 			"locations",
 			contents.locations!,
-			`${folder}/Locations`,
-			"Locations",
+			`${folder}/${SECTION_FOLDERS.locations}`,
 			() => new LocationModal(this.app, this.plugin, () => void this.render()).open(),
 			(fm) => ({
-				title: fm.name ?? "Unnamed",
+				title: fm.name ?? t("card.unnamed"),
 				// Type already shows as the badge, so the sub-line is just the parent location.
 				meta: (fm.parent ?? "").trim(),
 				badge: fm.type ?? "",
+				badgeText: displayValue("locationType", fm.type ?? ""),
 			}),
 			{
 				thumbs: true,
@@ -931,20 +920,20 @@ class UniverseBuilderView extends ItemView {
 				// always start their own tree, drawn in the separate Ships section below.
 				getParentName: (fm) => (isShip(fm) ? "" : fm.parent ?? ""),
 				getOwnName: (fm) => fm.name ?? "",
-				movableSection: { label: "Ships", isMovable: isShip },
+				movableSection: { id: "ships", label: t("locations.ships"), isMovable: isShip },
 			}
 		);
 
 		await this.renderSection(
 			"groups",
 			contents.groups!,
-			`${folder}/Groups`,
-			"Groups",
+			`${folder}/${SECTION_FOLDERS.groups}`,
 			() => new GroupModal(this.app, this.plugin, () => void this.render()).open(),
 			(fm) => ({
-				title: fm.name ?? "Unnamed",
+				title: fm.name ?? t("card.unnamed"),
 				meta: fm.goals ?? "",
 				badge: fm.alignment ?? "",
+				badgeText: displayValue("alignment", fm.alignment ?? ""),
 			}),
 			{ thumbs: true, expandable: true, typeGroups: true }
 		);
@@ -952,13 +941,13 @@ class UniverseBuilderView extends ItemView {
 		await this.renderSection(
 			"lore",
 			contents.lore!,
-			`${folder}/Lore`,
-			"Lore Entries",
+			`${folder}/${SECTION_FOLDERS.lore}`,
 			() => new LoreModal(this.app, this.plugin, () => void this.render()).open(),
 			(fm) => ({
-				title: fm.title ?? "Untitled",
-				meta: fm.category ?? "",
+				title: fm.title ?? t("card.untitled"),
+				meta: displayValue("loreCategory", fm.category ?? ""),
 				badge: fm.category ?? "",
+				badgeText: displayValue("loreCategory", fm.category ?? ""),
 			}),
 			{ thumbs: true, expandable: true }
 		);
@@ -966,11 +955,10 @@ class UniverseBuilderView extends ItemView {
 		await this.renderSection(
 			"timeline",
 			contents.timeline!,
-			`${folder}/Timeline`,
-			"Timeline Events",
+			`${folder}/${SECTION_FOLDERS.timeline}`,
 			() => new TimelineModal(this.app, this.plugin, () => void this.render()).open(),
 			(fm) => ({
-				title: fm.title ?? "Untitled",
+				title: fm.title ?? t("card.untitled"),
 				meta: fm.date ?? "",
 				badge: "",
 			}),
@@ -1108,7 +1096,7 @@ class UniverseBuilderView extends ItemView {
 
 		const none = body.querySelector<HTMLElement>(".wb-no-results");
 		if (none) {
-			none.textContent = `No ${none.getAttribute("data-noun") ?? "entries"} match \u201c${query.trim()}\u201d.`;
+			none.textContent = t(`noResults.${tab}`, { query: query.trim() });
 			none.classList.toggle("wb-filtered-out", !(searching && matches === 0));
 		}
 	}
@@ -1166,7 +1154,6 @@ class UniverseBuilderView extends ItemView {
 		tab: SectionTab,
 		pane: TabPane,
 		folderPath: string,
-		label: string,
 		onCreate: () => void,
 		getCard: CardFn,
 		opts: {
@@ -1183,7 +1170,7 @@ class UniverseBuilderView extends ItemView {
 			getParentName?: (fm: Record<string, string>) => string;
 			getOwnName?: (fm: Record<string, string>) => string;
 			/** Hierarchical tabs: roots matching isMovable (and their children) go in their own collapsible section, drawn last. */
-			movableSection?: { label: string; isMovable: (fm: Record<string, string>) => boolean };
+			movableSection?: { id: string; label: string; isMovable: (fm: Record<string, string>) => boolean };
 		} = {}
 	) {
 		const container = pane.body;
@@ -1193,7 +1180,7 @@ class UniverseBuilderView extends ItemView {
 		const files = getMarkdownFilesIn(this.app, folderPath);
 
 		if (files.length === 0) {
-			container.createDiv("wb-list").createDiv({ cls: "wb-empty", text: `No ${label.toLowerCase()} yet.` });
+			container.createDiv("wb-list").createDiv({ cls: "wb-empty", text: t(`empty.${tab}`) });
 			return;
 		}
 
@@ -1225,15 +1212,15 @@ class UniverseBuilderView extends ItemView {
 					tab, container, movableRoots, entries, childrenOf, getCard, !!opts.thumbs, !!opts.stackBadge, !!opts.expandable
 				);
 				const sectionList = header.nextElementSibling as HTMLElement;
-				this.wireTreeCollapse(tab, header, [sectionList], `${tab}:section:${movable.label.toLowerCase()}`);
+				this.wireTreeCollapse(tab, header, [sectionList], `${tab}:section:${movable.id}`);
 			}
-			this.createNoResultsLine(container, label);
+			this.createNoResultsLine(container);
 			return;
 		}
 
 		if (opts.typeGroups) {
 			this.renderTypeGroups(tab, container, entries, getCard, opts);
-			this.createNoResultsLine(container, label);
+			this.createNoResultsLine(container);
 			return;
 		}
 
@@ -1245,7 +1232,7 @@ class UniverseBuilderView extends ItemView {
 				this.plugin.settings.sectionOrder[tab] = order;
 				await this.plugin.saveSettings();
 			});
-			this.createNoResultsLine(container, label);
+			this.createNoResultsLine(container);
 			return;
 		}
 
@@ -1256,7 +1243,7 @@ class UniverseBuilderView extends ItemView {
 			const key = group.toLowerCase();
 			let bucket = groups.get(key);
 			if (!bucket) {
-				bucket = { label: group || "No Group", items: [] };
+				bucket = { label: group || t("group.none"), items: [] };
 				groups.set(key, bucket);
 			}
 			bucket.items.push(entry);
@@ -1265,7 +1252,7 @@ class UniverseBuilderView extends ItemView {
 		// Each group's logo: the first image in its note under <World>/Groups, matched by
 		// the note's `name` property or its file name (case-insensitive).
 		const groupLogos = new Map<string, string>();
-		const groupFolder = `${this.plugin.settings.worldFolder}/Groups`;
+		const groupFolder = `${this.plugin.settings.worldFolder}/${SECTION_FOLDERS.groups}`;
 		for (const file of getMarkdownFilesIn(this.app, groupFolder)) {
 			const content = await this.app.vault.cachedRead(file);
 			const src = this.findFirstImageSrc(content, file);
@@ -1339,7 +1326,7 @@ class UniverseBuilderView extends ItemView {
 			});
 		}
 
-		this.createNoResultsLine(container, label);
+		this.createNoResultsLine(container);
 	}
 
 	/**
@@ -1357,12 +1344,12 @@ class UniverseBuilderView extends ItemView {
 			const backBtn = navGroup.createEl("button", {
 				cls: "wb-nav-btn",
 				text: "<",
-				attr: { type: "button", "aria-label": "Back" },
+				attr: { type: "button", "aria-label": t("nav.back") },
 			});
 			const fwdBtn = navGroup.createEl("button", {
 				cls: "wb-nav-btn",
 				text: ">",
-				attr: { type: "button", "aria-label": "Forward" },
+				attr: { type: "button", "aria-label": t("nav.forward") },
 			});
 			backBtn.onclick = () => this.navigateBack();
 			fwdBtn.onclick = () => this.navigateForward();
@@ -1373,14 +1360,14 @@ class UniverseBuilderView extends ItemView {
 		if (reload) {
 			const reloadBtn = actions.createEl("button", { cls: "wb-btn-secondary wb-header-btn" });
 			setIcon(reloadBtn.createSpan({ cls: "wb-btn-icon" }), "refresh-cw");
-			reloadBtn.createSpan({ text: "Reload" });
+			reloadBtn.createSpan({ text: t("reload") });
 			reloadBtn.onclick = async () => {
 				await this.render();
-				new Notice("Universe Builder reloaded.");
+				new Notice(t("reload.done"));
 			};
 		}
 		if (onCreate) {
-			const btn = actions.createEl("button", { text: "+ New", cls: "wb-btn-secondary wb-header-btn" });
+			const btn = actions.createEl("button", { text: t("new"), cls: "wb-btn-secondary wb-header-btn" });
 			btn.onclick = onCreate;
 		}
 	}
@@ -1404,7 +1391,7 @@ class UniverseBuilderView extends ItemView {
 		getCard: CardFn,
 		opts: { thumbs?: boolean; stackBadge?: boolean; expandable?: boolean }
 	) {
-		const known = new Set(GROUP_TYPES.map((t) => t.key));
+		const known = new Set(GROUP_TYPES);
 		// Only entries whose parent was actually found are nested; everything else is a root.
 		const { roots, childrenOf } = buildParentTree(
 			entries,
@@ -1419,7 +1406,10 @@ class UniverseBuilderView extends ItemView {
 			groups.get(key)!.push(entry);
 		}
 
-		const sections = [...GROUP_TYPES, { key: "", label: "Unassigned" }].filter((t) => groups.has(t.key));
+		const sections = [
+			...GROUP_TYPES.map((key) => ({ key, label: optionLabel("groupType", key) })),
+			{ key: "", label: t("group.unassigned") },
+		].filter((s) => groups.has(s.key));
 		for (const { key, label } of sections) {
 			const header = container.createDiv("wb-group-header");
 			header.setAttribute("role", "button");
@@ -1510,7 +1500,7 @@ class UniverseBuilderView extends ItemView {
 		header.setAttribute("role", "button");
 		header.setAttribute("tabindex", "0");
 		setIcon(header.createSpan({ cls: "wb-group-chevron" }), "chevron-down");
-		header.createSpan({ cls: "wb-group-title", text: "Subsidiaries" });
+		header.createSpan({ cls: "wb-group-title", text: t("group.subsidiaries") });
 		header.createSpan({ cls: "wb-group-count", text: String(kids.length) });
 		const subList = group.createDiv("wb-list");
 
@@ -1663,11 +1653,8 @@ class UniverseBuilderView extends ItemView {
 	}
 
 	/** The "No ... match" line; hidden until applySearch() finds nothing. */
-	private createNoResultsLine(container: HTMLElement, label: string) {
-		container.createDiv({
-			cls: "wb-empty wb-no-results wb-filtered-out",
-			attr: { "data-noun": label.toLowerCase() },
-		});
+	private createNoResultsLine(container: HTMLElement) {
+		container.createDiv({ cls: "wb-empty wb-no-results wb-filtered-out" });
 	}
 
 	private renderCard(
@@ -1680,7 +1667,7 @@ class UniverseBuilderView extends ItemView {
 		expandable: boolean
 	): HTMLElement {
 		const { file, content, fm } = entry;
-		const { title, meta, badge, search, extraBadges } = getCard(fm);
+		const { title, meta, badge, badgeText, search, extraBadges } = getCard(fm);
 
 		const card = parent.createDiv("wb-card");
 		if (stackBadge) card.addClass("wb-card-stacked");
@@ -1729,7 +1716,7 @@ class UniverseBuilderView extends ItemView {
 			const badgeHost = stackBadge ? body.createDiv("wb-card-badge-row") : titleEl;
 			if (badge) {
 				const b = badgeHost.createSpan({ cls: `wb-badge wb-badge-${badge.toLowerCase()}` });
-				b.setText(badge);
+				b.setText(badgeText || badge);
 			}
 			for (const extra of extras) badgeHost.createSpan({ cls: `wb-badge ${extra.cls}`, text: extra.text });
 		}
@@ -1766,7 +1753,7 @@ class UniverseBuilderView extends ItemView {
 		const wasExpanded = card.classList.contains("wb-card-expanded");
 		// Collapsing a card mid-edit would throw the edits away: ask first.
 		if (wasExpanded && !force && this.activeEdit?.card === card && this.activeEdit.isDirty()) {
-			void confirmModal(this.app, "Discard changes?", `Your edits to "${entry.file.basename}" haven't been saved.`, "Discard").then((ok) => {
+			void confirmModal(this.app, t("discard.title"), t("discard.message", { name: entry.file.basename }), t("discard.action")).then((ok) => {
 				if (ok) this.toggleCardExpand(tab, card, entry, true);
 			});
 			return;
@@ -1781,8 +1768,8 @@ class UniverseBuilderView extends ItemView {
 		const other = this.floating?.card;
 		if (other && other !== card && other.isConnected && other.classList.contains("wb-card-expanded")) {
 			if (!force && this.activeEdit?.card === other && this.activeEdit.isDirty()) {
-				const name = this.entryByPath.get(other.getAttribute("data-path") ?? "")?.file.basename ?? "this entry";
-				void confirmModal(this.app, "Discard changes?", `Your edits to "${name}" haven't been saved.`, "Discard").then((ok) => {
+				const name = this.entryByPath.get(other.getAttribute("data-path") ?? "")?.file.basename ?? t("card.thisEntry");
+				void confirmModal(this.app, t("discard.title"), t("discard.message", { name }), t("discard.action")).then((ok) => {
 					if (ok) this.toggleCardExpand(tab, card, entry, true);
 				});
 				return;
@@ -1823,8 +1810,8 @@ class UniverseBuilderView extends ItemView {
 			e.stopPropagation();
 			const menu = new Menu();
 			menu.addItem((item) =>
-				item.setTitle("Copy").setIcon("copy").onClick(() => {
-					void navigator.clipboard.writeText(text).catch(() => new Notice("Couldn't copy the selection."));
+				item.setTitle(t("card.copy")).setIcon("copy").onClick(() => {
+					void navigator.clipboard.writeText(text).catch(() => new Notice(t("card.copyFailed")));
 				})
 			);
 			menu.showAtMouseEvent(e);
@@ -1875,8 +1862,8 @@ class UniverseBuilderView extends ItemView {
 			btn.onclick = () => this.navigateCard(dir);
 			return btn;
 		};
-		const cardBack = navBtn("Back", "chevron-left", -1);
-		const cardFwd = navBtn("Forward", "chevron-right", 1);
+		const cardBack = navBtn(t("nav.back"), "chevron-left", -1);
+		const cardFwd = navBtn(t("nav.forward"), "chevron-right", 1);
 		this.cardNavButtons.push({ back: cardBack, fwd: cardFwd });
 		this.updateNavButtonStates();
 		leftGroup.createSpan({ cls: "wb-toolbar-sep", text: "|", attr: { "aria-hidden": "true" } });
@@ -1887,7 +1874,7 @@ class UniverseBuilderView extends ItemView {
 		// Icon + label, like Modify MD / Edit beside it. The whole button (label included) turns the
 		// accent color while the entry is bookmarked.
 		setIcon(bookmarkBtn.createSpan({ cls: "wb-btn-icon" }), "bookmark");
-		bookmarkBtn.createSpan({ text: "Bookmark" });
+		bookmarkBtn.createSpan({ text: t("bookmarks.button") });
 		this.syncBookmarkToggle(bookmarkBtn, this.plugin.settings.bookmarks.includes(entry.file.path));
 		bookmarkBtn.onclick = () => void this.toggleBookmark(entry.file.path);
 
@@ -1898,24 +1885,24 @@ class UniverseBuilderView extends ItemView {
 			// Modify MD: opens the note in the main editor (what Edit used to do).
 			const modifyBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
 			setIcon(modifyBtn.createSpan({ cls: "wb-btn-icon" }), "file-text");
-			modifyBtn.createSpan({ text: "Modify MD" });
+			modifyBtn.createSpan({ text: t("card.modifyMd") });
 			modifyBtn.onclick = () => this.app.workspace.getLeaf().openFile(entry.file);
 			// Edit: edits the note's markdown right here in the sidebar.
 			const editBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
 			setIcon(editBtn.createSpan({ cls: "wb-btn-icon" }), "pencil");
-			editBtn.createSpan({ text: "Edit" });
+			editBtn.createSpan({ text: t("card.edit") });
 			editBtn.onclick = () => void runExclusive(startEditing);
 		};
 		const showEditActions = () => {
 			actions.empty();
 			const cancelBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
 			setIcon(cancelBtn.createSpan({ cls: "wb-btn-icon" }), "x");
-			cancelBtn.createSpan({ text: "Cancel" });
+			cancelBtn.createSpan({ text: t("card.cancel") });
 			cancelBtn.onclick = () => void runExclusive(discard);
 			// Same look as Cancel beside it: the floating card already stands out on its own.
 			const saveBtn = actions.createEl("button", { cls: "wb-btn-secondary", attr: { type: "button" } });
 			setIcon(saveBtn.createSpan({ cls: "wb-btn-icon" }), "check");
-			saveBtn.createSpan({ text: "Save" });
+			saveBtn.createSpan({ text: t("card.save") });
 			saveBtn.onclick = () => void runExclusive(finishEditing);
 		};
 
@@ -1974,7 +1961,7 @@ class UniverseBuilderView extends ItemView {
 			try {
 				original = await this.app.vault.read(entry.file);
 			} catch {
-				new Notice(`Couldn't read "${entry.file.basename}".`);
+				new Notice(t("notice.readFailed", { name: entry.file.basename }));
 				return;
 			}
 			if (!card.isConnected || !expand.isConnected || editor) return;
@@ -2015,7 +2002,7 @@ class UniverseBuilderView extends ItemView {
 		};
 
 		const discard = async () => {
-			if (isDirty() && !(await confirmModal(this.app, "Discard changes?", `Your edits to "${entry.file.basename}" haven't been saved.`, "Discard"))) {
+			if (isDirty() && !(await confirmModal(this.app, t("discard.title"), t("discard.message", { name: entry.file.basename }), t("discard.action")))) {
 				editor?.focus();
 				return;
 			}
@@ -2032,9 +2019,9 @@ class UniverseBuilderView extends ItemView {
 					const current = await this.app.vault.read(entry.file);
 					if (current !== original && !(await confirmModal(
 						this.app,
-						"Note changed elsewhere",
-						`"${entry.file.basename}" was modified outside the sidebar after you started editing. Overwrite it with your version?`,
-						"Overwrite"
+						t("overwrite.title"),
+						t("overwrite.message", { name: entry.file.basename }),
+						t("overwrite.action")
 					))) {
 						editor?.focus();
 						return;
@@ -2043,7 +2030,7 @@ class UniverseBuilderView extends ItemView {
 					await this.app.vault.modify(entry.file, editor.getText());
 				}
 				// Added after the text is written, so it lands at the top of the saved body.
-				await portrait?.picker.attachTo(entry.file, `Saved "${entry.file.basename}", but its portrait couldn't be imported.`);
+				await portrait?.picker.attachTo(entry.file, t("notice.savedNoPortrait", { name: entry.file.basename }));
 				removePortraitPicker();
 				if (this.activeEdit?.card === card) this.activeEdit = null;
 				editor?.destroy();
@@ -2051,10 +2038,10 @@ class UniverseBuilderView extends ItemView {
 				// Redraw so the card's title/badges/grouping reflect the new frontmatter, then re-open it
 				// (still floating, in read mode).
 				await this.render({ keepExpanded: true });
-				new Notice(`Saved "${entry.file.basename}".`);
+				new Notice(t("notice.saved", { name: entry.file.basename }));
 			} catch (err) {
 				console.error("Universe Builder: save failed", err);
-				new Notice(`Couldn't save "${entry.file.basename}".`);
+				new Notice(t("notice.saveFailed", { name: entry.file.basename }));
 			}
 		};
 
@@ -2066,10 +2053,10 @@ class UniverseBuilderView extends ItemView {
 		const footer = expand.createDiv("wb-card-expand-footer");
 		const deleteBtn = footer.createEl("button", {
 			cls: "wb-btn-secondary wb-btn-danger wb-card-delete-btn",
-			attr: { type: "button", "aria-label": "Delete entry" },
+			attr: { type: "button", "aria-label": t("card.deleteLabel") },
 		});
 		setIcon(deleteBtn.createSpan({ cls: "wb-btn-icon" }), "trash-2");
-		deleteBtn.createSpan({ text: "DELETE" });
+		deleteBtn.createSpan({ text: t("card.delete") });
 		deleteBtn.onclick = () => void runExclusive(() => this.deleteEntry(card, entry));
 
 		// Switching edits from another card saved (and redrew) the sidebar: open this card's editor now.
@@ -2088,13 +2075,12 @@ class UniverseBuilderView extends ItemView {
 	 */
 	private async deleteEntry(card: HTMLElement, entry: NoteEntry) {
 		const section = this.findEntryTab(entry.file);
-		const category = section ? SECTION_SINGULAR[section] : "";
 		const name = (entry.fm.name || entry.fm.title || entry.file.basename).trim() || entry.file.basename;
 		const ok = await confirmModal(
 			this.app,
-			"Delete entry?",
-			`Are you sure you want to delete this ${category ? `${category} entry` : "entry"}, ${name}?`,
-			"Delete",
+			t("delete.title"),
+			section ? t("delete.message", { category: t(`category.${section}`), name }) : t("delete.messagePlain", { name }),
+			t("delete.action"),
 			true
 		);
 		if (!ok) return;
@@ -2105,14 +2091,14 @@ class UniverseBuilderView extends ItemView {
 			await this.app.fileManager.trashFile(entry.file);
 		} catch (err) {
 			console.error("Universe Builder: delete failed", err);
-			new Notice(`Couldn't delete "${name}".`);
+			new Notice(t("notice.deleteFailed", { name }));
 			return;
 		}
 		this.forgetNavPath(path);
 		// Nothing is expanded now: make that the current point in the history.
 		this.recordNav(this.activeTab, null);
 		await this.render();
-		new Notice(`Deleted "${name}".`);
+		new Notice(t("notice.deleted", { name }));
 	}
 
 	/** Drops a deleted note from the Back / Forward history, so those buttons can't step to it. */
@@ -2344,7 +2330,7 @@ class UniverseBuilderView extends ItemView {
 
 	/** The section folder a tab's notes live in, e.g. "UniverseBuilder/Characters". */
 	private tabFolder(tab: SectionTab): string {
-		return `${this.plugin.settings.worldFolder}/${SECTION_LABELS[tab]}`;
+		return `${this.plugin.settings.worldFolder}/${SECTION_FOLDERS[tab]}`;
 	}
 
 	/** Which tab (if any) a given file's own card lives on. */
@@ -2388,14 +2374,14 @@ class UniverseBuilderView extends ItemView {
 		for (const btn of this.bookmarkHeaderButtons) {
 			btn.classList.toggle("is-active", open);
 			btn.setAttribute("aria-pressed", String(open));
-			btn.setAttribute("aria-label", open ? "Close bookmarks" : "Bookmarks");
+			btn.setAttribute("aria-label", open ? t("bookmarks.close") : t("bookmarks"));
 		}
 	}
 
 	private syncBookmarkToggle(btn: HTMLElement, on: boolean) {
 		btn.classList.toggle("is-bookmarked", on);
 		btn.setAttribute("aria-pressed", String(on));
-		btn.setAttribute("aria-label", on ? "Remove bookmark" : "Add bookmark");
+		btn.setAttribute("aria-label", on ? t("bookmarks.remove") : t("bookmarks.add"));
 	}
 
 	/** Adds or removes one note from the bookmarks, updating every expanded copy of its card. */
@@ -2440,7 +2426,7 @@ class UniverseBuilderView extends ItemView {
 		if (entries.length === 0) {
 			container.createDiv("wb-list").createDiv({
 				cls: "wb-empty",
-				text: "No bookmarks yet. Expand an entry and click its bookmark icon to add it here.",
+				text: t("bookmarks.empty"),
 			});
 			this.applySearch(tab);
 			return;
@@ -2455,7 +2441,7 @@ class UniverseBuilderView extends ItemView {
 			header.setAttribute("role", "button");
 			header.setAttribute("tabindex", "0");
 			setIcon(header.createSpan({ cls: "wb-group-chevron" }), "chevron-down");
-			header.createSpan({ cls: "wb-group-title", text: SECTION_LABELS[section] });
+			header.createSpan({ cls: "wb-group-title", text: t(`tab.${section}`) });
 			const list = container.createDiv("wb-list");
 
 			const applyCollapsed = (collapsed: boolean) => {
@@ -2492,7 +2478,7 @@ class UniverseBuilderView extends ItemView {
 			});
 		}
 
-		this.createNoResultsLine(container, "Bookmarks");
+		this.createNoResultsLine(container);
 		this.applySearch(tab);
 
 		// Re-open the cards that were expanded before the redraw, without adding history entries.
@@ -2627,7 +2613,7 @@ class UniverseBuilderView extends ItemView {
 		const linkPath = linktext.split("#")[0];
 		const dest = this.app.metadataCache.getFirstLinkpathDest(linkPath, sourcePath);
 		if (!dest) {
-			new Notice(`Couldn't find "${linktext}".`);
+			new Notice(t("notice.linkNotFound", { name: linktext }));
 			return;
 		}
 		const tab = this.findEntryTab(dest);
@@ -2723,7 +2709,7 @@ class UniverseBuilderView extends ItemView {
 			if (!image) return;
 			if (this.activeEdit) {
 				// Saving the portrait redraws the sidebar, which would close the open editor.
-				new Notice("Finish editing the open entry before dropping an image.");
+				new Notice(t("notice.finishEditing"));
 				return;
 			}
 			void this.setPortrait(entry.file, title, image);
@@ -2743,14 +2729,14 @@ class UniverseBuilderView extends ItemView {
 			const existing = this.findFirstImage(await this.app.vault.read(note), note);
 			if (existing) {
 				if (image.kind === "vault" && existing.file?.path === image.file.path) {
-					new Notice(`"${image.file.name}" is already the portrait for "${title}".`);
+					new Notice(t("portrait.alreadySet", { image: image.file.name, name: title }));
 					return;
 				}
 				const ok = await confirmModal(
 					this.app,
-					"Replace portrait?",
-					`"${title}" already has a portrait (${existing.name}). Replace it with ${image.file.name}?`,
-					"Replace"
+					t("portrait.replaceTitle"),
+					t("portrait.replaceMessage", { name: title, old: existing.name, image: image.file.name }),
+					t("portrait.replaceAction")
 				);
 				if (!ok) return;
 			}
@@ -2769,10 +2755,10 @@ class UniverseBuilderView extends ItemView {
 				return insertAtBodyTop(data, portraitEmbed(this.app, imageFile, note.path));
 			});
 			await this.render({ keepExpanded: true });
-			new Notice(`Portrait ${existing ? "replaced" : "added"} for "${title}".`);
+			new Notice(t(existing ? "portrait.replaced" : "portrait.added", { name: title }));
 		} catch (err) {
 			console.error("Universe Builder: setting portrait failed", err);
-			new Notice(`Couldn't set the portrait for "${title}".`);
+			new Notice(t("portrait.failed", { name: title }));
 		}
 	}
 
@@ -2935,7 +2921,7 @@ function createAutoTextarea(parent: HTMLElement, cls: string, value: string, lab
 function createRawEditor(anchor: HTMLElement, file: TFile, text: string, keys: InlineEditorKeys): InlineEditor {
 	const wrap = createDiv("wb-card-editor-wrap");
 	anchor.insertAdjacentElement("afterend", wrap);
-	const ta = createAutoTextarea(wrap, "wb-card-editor", text, `Edit ${file.basename}`, keys);
+	const ta = createAutoTextarea(wrap, "wb-card-editor", text, t("card.editLabel", { name: file.basename }), keys);
 	return {
 		getText: () => ta.value,
 		isDirty: () => ta.value !== text,
@@ -3052,10 +3038,10 @@ function createLivePreviewEditor(
 			attr: { type: "button", "aria-expanded": "false" },
 		});
 		setIcon(toggle.createSpan({ cls: "wb-card-editor-props-chevron" }), "chevron-right");
-		toggle.createSpan({ text: "Properties" });
+		toggle.createSpan({ text: t("card.properties") });
 		const count = fm.yaml.split(/\r?\n/).filter((line) => /^[^\s#-][^:]*:/.test(line)).length;
 		if (count) toggle.createSpan({ cls: "wb-card-editor-props-count", text: `(${count})` });
-		const box = createAutoTextarea(wrap, "wb-card-editor wb-card-editor-props", fm.yaml, `Properties of ${file.basename}`, keys);
+		const box = createAutoTextarea(wrap, "wb-card-editor wb-card-editor-props", fm.yaml, t("card.propertiesOf", { name: file.basename }), keys);
 		box.hide();
 		props = box;
 		toggle.onclick = () => {
@@ -3205,7 +3191,7 @@ function confirmModal(app: App, title: string, message: string, actionLabel: str
 		modal.titleEl.setText(title);
 		modal.contentEl.createEl("p", { text: message });
 		const buttons = modal.contentEl.createDiv("wb-confirm-buttons");
-		const cancelBtn = buttons.createEl("button", { text: "Cancel", cls: "wb-btn-secondary", attr: { type: "button" } });
+		const cancelBtn = buttons.createEl("button", { text: t("confirm.cancel"), cls: "wb-btn-secondary", attr: { type: "button" } });
 		cancelBtn.onclick = () => modal.close();
 		// `danger`: a red action button (e.g. Delete) instead of the accent-colored one.
 		const okBtn = buttons.createEl("button", { text: actionLabel, cls: danger ? "wb-btn-primary wb-btn-danger" : "wb-btn-primary", attr: { type: "button" } });
@@ -3246,20 +3232,20 @@ class PortraitPicker {
 		const folder = portraitFolderFor(plugin.settings.worldFolder, `${sectionFolder}/_.md`);
 		this.zone = parent.createDiv({
 			cls: "wb-portrait-drop",
-			attr: { role: "button", tabindex: "0", "aria-label": "Portrait: drop an image here, or press Enter to choose one" },
+			attr: { role: "button", tabindex: "0", "aria-label": t("portrait.dropLabel") },
 		});
 		const preview = this.zone.createDiv("wb-portrait-drop-preview");
 		this.previewImg = preview.createEl("img", { attr: { alt: "", draggable: "false" } });
 		setIcon(preview.createDiv("wb-portrait-drop-icon"), "image-plus");
 
 		const text = this.zone.createDiv("wb-portrait-drop-text");
-		text.createDiv({ cls: "wb-portrait-drop-title", text: "Drag and drop an image here to import it into the vault" });
+		text.createDiv({ cls: "wb-portrait-drop-title", text: t("portrait.dropTitle") });
 		this.nameEl = text.createDiv({ cls: "wb-portrait-drop-name" });
-		text.createDiv({ cls: "wb-portrait-drop-hint", text: `Or click to choose a file. It becomes the entry's portrait and is saved to ${folder}/.` });
+		text.createDiv({ cls: "wb-portrait-drop-hint", text: t("portrait.dropHint", { folder }) });
 
 		const removeBtn = this.zone.createEl("button", {
 			cls: "wb-portrait-drop-remove clickable-icon",
-			attr: { type: "button", "aria-label": "Remove image" },
+			attr: { type: "button", "aria-label": t("portrait.remove") },
 		});
 		setIcon(removeBtn, "x");
 		removeBtn.onclick = (e) => { e.stopPropagation(); this.set(null); };
@@ -3331,7 +3317,7 @@ class PortraitPicker {
 			this.objectUrl = URL.createObjectURL(image.file);
 			this.previewImg.src = this.objectUrl;
 		}
-		this.nameEl.setText(image ? (image.kind === "vault" ? `${image.file.name} (already in the vault)` : image.file.name) : "");
+		this.nameEl.setText(image ? (image.kind === "vault" ? t("portrait.inVault", { name: image.file.name }) : image.file.name) : "");
 		this.zone.toggleClass("has-image", !!image);
 	}
 
@@ -3387,66 +3373,66 @@ class CharacterModal extends Modal {
 	onOpen() {
 		const { contentEl } = this;
 		contentEl.addClass("wb-modal");
-		contentEl.createEl("h2", { text: "New Character" });
-		this.portrait = new PortraitPicker(this.app, this.plugin, contentEl, `${this.plugin.settings.worldFolder}/Characters`, this.modalEl);
+		contentEl.createEl("h2", { text: t("character.new") });
+		this.portrait = new PortraitPicker(this.app, this.plugin, contentEl, `${this.plugin.settings.worldFolder}/${SECTION_FOLDERS.characters}`, this.modalEl);
 
-		new Setting(contentEl).setName("Name").addText((t) => {
-			t.setPlaceholder("Character name").onChange((v) => (this.data.name = v));
+		new Setting(contentEl).setName(t("form.name")).addText((text) => {
+			text.setPlaceholder(t("character.namePlaceholder")).onChange((v) => (this.data.name = v));
 		});
-		new Setting(contentEl).setName("Role").addDropdown((d) => {
-			["protagonist", "antagonist", "supporting", "minor"].forEach((o) => {
-				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1));
+		new Setting(contentEl).setName(t("character.role")).addDropdown((d) => {
+			CHARACTER_ROLES.forEach((o) => {
+				d.addOption(o, optionLabel("role", o));
 			});
 			d.setValue(this.data.role);
 			d.onChange((v) => (this.data.role = v));
 		});
-		new Setting(contentEl).setName("Age").addText((t) => {
-			t.setPlaceholder("e.g. 34").onChange((v) => (this.data.age = v));
+		new Setting(contentEl).setName(t("character.age")).addText((text) => {
+			text.setPlaceholder(t("character.agePlaceholder")).onChange((v) => (this.data.age = v));
 		});
-		new Setting(contentEl).setName("Group").addText((t) => {
-			t.setPlaceholder("Group name").onChange((v) => (this.data.group = v));
+		new Setting(contentEl).setName(t("character.group")).addText((text) => {
+			text.setPlaceholder(t("character.groupPlaceholder")).onChange((v) => (this.data.group = v));
 		});
-		new Setting(contentEl).setName("Ship").addText((t) => {
-			t.setPlaceholder("Ship name").onChange((v) => (this.data.ship = v));
+		new Setting(contentEl).setName(t("character.ship")).addText((text) => {
+			text.setPlaceholder(t("character.shipPlaceholder")).onChange((v) => (this.data.ship = v));
 		});
-		new Setting(contentEl).setName("Home").addText((t) => {
-			t.setPlaceholder("Home name").onChange((v) => (this.data.home = v));
+		new Setting(contentEl).setName(t("character.home")).addText((text) => {
+			text.setPlaceholder(t("character.homePlaceholder")).onChange((v) => (this.data.home = v));
 		});
-		new Setting(contentEl).setName("Physical Description").addTextArea((t) => {
-			t.inputEl.addClass("wb-textarea");
-			t.onChange((v) => (this.data.physicalDesc = v));
+		new Setting(contentEl).setName(t("character.physicalDesc")).addTextArea((text) => {
+			text.inputEl.addClass("wb-textarea");
+			text.onChange((v) => (this.data.physicalDesc = v));
 		});
-		new Setting(contentEl).setName("Personality").addTextArea((t) => {
-			t.inputEl.addClass("wb-textarea");
-			t.onChange((v) => (this.data.personality = v));
+		new Setting(contentEl).setName(t("character.personality")).addTextArea((text) => {
+			text.inputEl.addClass("wb-textarea");
+			text.onChange((v) => (this.data.personality = v));
 		});
-		new Setting(contentEl).setName("Goals").addTextArea((t) => {
-			t.inputEl.addClass("wb-textarea");
-			t.onChange((v) => (this.data.goals = v));
+		new Setting(contentEl).setName(t("form.goals")).addTextArea((text) => {
+			text.inputEl.addClass("wb-textarea");
+			text.onChange((v) => (this.data.goals = v));
 		});
 
 		new Setting(contentEl).addButton((b) =>
-			b.setButtonText("Create").setCta().onClick(() => void this.submit())
+			b.setButtonText(t("form.create")).setCta().onClick(() => void this.submit())
 		);
 	}
 
 	async submit() {
-		if (!this.data.name.trim()) { new Notice("Name is required."); return; }
-		const folder = `${this.plugin.settings.worldFolder}/Characters`;
-		// Character note sections, in order. Text entered in the form goes under its heading;
-		// the rest are left as empty headings to fill in later.
+		if (!this.data.name.trim()) { new Notice(t("form.nameRequired")); return; }
+		const folder = `${this.plugin.settings.worldFolder}/${SECTION_FOLDERS.characters}`;
+		// Character note sections, in order (headings in the current display language). Text entered
+		// in the form goes under its heading; the rest are left as empty headings to fill in later.
 		const sections: [string, string][] = [
-			["Origin", ""],
-			["Physical Description", this.data.physicalDesc],
-			["Occupation", ""],
-			["Resume", ""],
-			["Role In Story", ""],
-			["Goals", this.data.goals],
-			["Personality", this.data.personality],
-			["Habits/Mannerisms", ""],
-			["Earlier Life", ""],
-			["Internal Conflicts", ""],
-			["External Conflicts", ""],
+			[t("note.origin"), ""],
+			[t("note.physicalDesc"), this.data.physicalDesc],
+			[t("note.occupation"), ""],
+			[t("note.resume"), ""],
+			[t("note.roleInStory"), ""],
+			[t("note.goals"), this.data.goals],
+			[t("note.personality"), this.data.personality],
+			[t("note.habits"), ""],
+			[t("note.earlierLife"), ""],
+			[t("note.internalConflicts"), ""],
+			[t("note.externalConflicts"), ""],
 		];
 		const sectionLines: string[] = [];
 		for (const [heading, text] of sections) {
@@ -3470,8 +3456,8 @@ class CharacterModal extends Modal {
 			...sectionLines,
 		].join("\n");
 		const file = await createNote(this.app, folder, this.data.name, content);
-		await this.portrait?.attachTo(file, `"${file.basename}" was created, but its portrait couldn't be imported.`);
-		new Notice(`Character "${this.data.name}" created.`);
+		await this.portrait?.attachTo(file, t("form.createdNoPortrait", { name: file.basename }));
+		new Notice(t("character.created", { name: this.data.name }));
 		this.close();
 		this.onDone();
 		await this.app.workspace.getLeaf().openFile(file);
@@ -3501,43 +3487,43 @@ class LocationModal extends Modal {
 	onOpen() {
 		const { contentEl } = this;
 		contentEl.addClass("wb-modal");
-		contentEl.createEl("h2", { text: "New Location" });
-		this.portrait = new PortraitPicker(this.app, this.plugin, contentEl, `${this.plugin.settings.worldFolder}/Locations`, this.modalEl);
+		contentEl.createEl("h2", { text: t("location.new") });
+		this.portrait = new PortraitPicker(this.app, this.plugin, contentEl, `${this.plugin.settings.worldFolder}/${SECTION_FOLDERS.locations}`, this.modalEl);
 
-		new Setting(contentEl).setName("Name").addText((t) => {
-			t.setPlaceholder("Location name").onChange((v) => (this.data.name = v));
+		new Setting(contentEl).setName(t("form.name")).addText((text) => {
+			text.setPlaceholder(t("location.namePlaceholder")).onChange((v) => (this.data.name = v));
 		});
-		new Setting(contentEl).setName("Type").addDropdown((d) => {
-			["planet", "dwarf planet", "moon", "station", "asteroid", "belt", "ship", "city", "region", "building", "landmark", "other"].forEach((o) => {
-				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1));
+		new Setting(contentEl).setName(t("form.type")).addDropdown((d) => {
+			LOCATION_TYPES.forEach((o) => {
+				d.addOption(o, optionLabel("locationType", o));
 			});
 			d.setValue(this.data.type);
 			d.onChange((v) => (this.data.type = v));
 		});
-		new Setting(contentEl).setName("Parent Location").addText((t) => {
-			t.setPlaceholder("e.g. The Northern Kingdom").onChange((v) => (this.data.parent = v));
+		new Setting(contentEl).setName(t("location.parent")).addText((text) => {
+			text.setPlaceholder(t("location.parentPlaceholder")).onChange((v) => (this.data.parent = v));
 		});
-		new Setting(contentEl).setName("Description").addTextArea((t) => {
-			t.inputEl.addClass("wb-textarea");
-			t.onChange((v) => (this.data.description = v));
+		new Setting(contentEl).setName(t("form.description")).addTextArea((text) => {
+			text.inputEl.addClass("wb-textarea");
+			text.onChange((v) => (this.data.description = v));
 		});
-		new Setting(contentEl).setName("Who Lives Here").addTextArea((t) => {
-			t.inputEl.addClass("wb-textarea");
-			t.onChange((v) => (this.data.inhabitants = v));
+		new Setting(contentEl).setName(t("location.inhabitants")).addTextArea((text) => {
+			text.inputEl.addClass("wb-textarea");
+			text.onChange((v) => (this.data.inhabitants = v));
 		});
-		new Setting(contentEl).setName("Secrets").addTextArea((t) => {
-			t.inputEl.addClass("wb-textarea");
-			t.onChange((v) => (this.data.secrets = v));
+		new Setting(contentEl).setName(t("location.secrets")).addTextArea((text) => {
+			text.inputEl.addClass("wb-textarea");
+			text.onChange((v) => (this.data.secrets = v));
 		});
 
 		new Setting(contentEl).addButton((b) =>
-			b.setButtonText("Create").setCta().onClick(() => void this.submit())
+			b.setButtonText(t("form.create")).setCta().onClick(() => void this.submit())
 		);
 	}
 
 	async submit() {
-		if (!this.data.name.trim()) { new Notice("Name is required."); return; }
-		const folder = `${this.plugin.settings.worldFolder}/Locations`;
+		if (!this.data.name.trim()) { new Notice(t("form.nameRequired")); return; }
+		const folder = `${this.plugin.settings.worldFolder}/${SECTION_FOLDERS.locations}`;
 		const parentLink = this.data.parent ? `[[${this.data.parent}]]` : "";
 		const content = [
 			"---",
@@ -3549,19 +3535,19 @@ class LocationModal extends Modal {
 			"",
 			`# ${this.data.name}`,
 			"",
-			...(parentLink ? [`**Part of:** ${parentLink}`, ""] : []),
-			"## Description",
-			this.data.description || "_None provided._",
+			...(parentLink ? [`**${t("note.partOf")}:** ${parentLink}`, ""] : []),
+			`## ${t("note.description")}`,
+			this.data.description || t("note.noneProvided"),
 			"",
-			"## Who Lives Here",
-			this.data.inhabitants || "_None provided._",
+			`## ${t("note.inhabitants")}`,
+			this.data.inhabitants || t("note.noneProvided"),
 			"",
-			"## Secrets",
-			this.data.secrets || "_None provided._",
+			`## ${t("note.secrets")}`,
+			this.data.secrets || t("note.noneProvided"),
 		].join("\n");
 		const file = await createNote(this.app, folder, this.data.name, content);
-		await this.portrait?.attachTo(file, `"${file.basename}" was created, but its portrait couldn't be imported.`);
-		new Notice(`Location "${this.data.name}" created.`);
+		await this.portrait?.attachTo(file, t("form.createdNoPortrait", { name: file.basename }));
+		new Notice(t("location.created", { name: this.data.name }));
 		this.close();
 		this.onDone();
 		await this.app.workspace.getLeaf().openFile(file);
@@ -3590,19 +3576,19 @@ class GroupModal extends Modal {
 	onOpen() {
 		const { contentEl } = this;
 		contentEl.addClass("wb-modal");
-		contentEl.createEl("h2", { text: "New Group" });
-		this.portrait = new PortraitPicker(this.app, this.plugin, contentEl, `${this.plugin.settings.worldFolder}/Groups`, this.modalEl);
+		contentEl.createEl("h2", { text: t("group.new") });
+		this.portrait = new PortraitPicker(this.app, this.plugin, contentEl, `${this.plugin.settings.worldFolder}/${SECTION_FOLDERS.groups}`, this.modalEl);
 
-		new Setting(contentEl).setName("Name").addText((t) => {
-			t.setPlaceholder("Group name").onChange((v) => (this.data.name = v));
+		new Setting(contentEl).setName(t("form.name")).addText((text) => {
+			text.setPlaceholder(t("group.namePlaceholder")).onChange((v) => (this.data.name = v));
 		});
-		new Setting(contentEl).setName("Type").addDropdown((d) => {
-			GROUP_TYPES.forEach(({ key, label }) => { d.addOption(key, label); });
+		new Setting(contentEl).setName(t("form.type")).addDropdown((d) => {
+			GROUP_TYPES.forEach((key) => { d.addOption(key, optionLabel("groupType", key)); });
 			d.setValue(this.data.type);
 			d.onChange((v) => (this.data.type = v));
 		});
 		// Existing groups (by their `name` property, else the file name), alphabetically.
-		const folder = `${this.plugin.settings.worldFolder}/Groups`;
+		const folder = `${this.plugin.settings.worldFolder}/${SECTION_FOLDERS.groups}`;
 		const existing = Array.from(new Set(
 			getMarkdownFilesIn(this.app, folder)
 				.map((f) => {
@@ -3611,44 +3597,44 @@ class GroupModal extends Modal {
 				})
 		)).sort((a, b) => a.localeCompare(b));
 		new Setting(contentEl)
-			.setName("Subsidiary of")
-			.setDesc("Nests this group under its parent's Subsidiaries label instead of its Type section.")
+			.setName(t("group.subsidiaryOf"))
+			.setDesc(t("group.subsidiaryOfDesc"))
 			.addDropdown((d) => {
-				d.addOption("", "None");
+				d.addOption("", t("group.subsidiaryNone"));
 				existing.forEach((n) => { d.addOption(n, n); });
 				d.setValue(this.data.subsidiaryOf);
 				d.onChange((v) => (this.data.subsidiaryOf = v));
 			});
-		new Setting(contentEl).setName("Alignment").addDropdown((d) => {
-			["lawful", "neutral", "chaotic"].forEach((o) => {
-				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1));
+		new Setting(contentEl).setName(t("group.alignment")).addDropdown((d) => {
+			GROUP_ALIGNMENTS.forEach((o) => {
+				d.addOption(o, optionLabel("alignment", o));
 			});
 			d.setValue(this.data.alignment);
 			d.onChange((v) => (this.data.alignment = v));
 		});
-		new Setting(contentEl).setName("Goals").addTextArea((t) => {
-			t.inputEl.addClass("wb-textarea");
-			t.onChange((v) => (this.data.goals = v));
+		new Setting(contentEl).setName(t("form.goals")).addTextArea((text) => {
+			text.inputEl.addClass("wb-textarea");
+			text.onChange((v) => (this.data.goals = v));
 		});
-		new Setting(contentEl).setName("Enemies").addText((t) => {
-			t.setPlaceholder("Comma-separated").onChange((v) => (this.data.enemies = v));
+		new Setting(contentEl).setName(t("group.enemies")).addText((text) => {
+			text.setPlaceholder(t("form.commaSeparated")).onChange((v) => (this.data.enemies = v));
 		});
-		new Setting(contentEl).setName("Allies").addText((t) => {
-			t.setPlaceholder("Comma-separated").onChange((v) => (this.data.allies = v));
+		new Setting(contentEl).setName(t("group.allies")).addText((text) => {
+			text.setPlaceholder(t("form.commaSeparated")).onChange((v) => (this.data.allies = v));
 		});
-		new Setting(contentEl).setName("Description").addTextArea((t) => {
-			t.inputEl.addClass("wb-textarea");
-			t.onChange((v) => (this.data.description = v));
+		new Setting(contentEl).setName(t("form.description")).addTextArea((text) => {
+			text.inputEl.addClass("wb-textarea");
+			text.onChange((v) => (this.data.description = v));
 		});
 
 		new Setting(contentEl).addButton((b) =>
-			b.setButtonText("Create").setCta().onClick(() => void this.submit())
+			b.setButtonText(t("form.create")).setCta().onClick(() => void this.submit())
 		);
 	}
 
 	async submit() {
-		if (!this.data.name.trim()) { new Notice("Name is required."); return; }
-		const folder = `${this.plugin.settings.worldFolder}/Groups`;
+		if (!this.data.name.trim()) { new Notice(t("form.nameRequired")); return; }
+		const folder = `${this.plugin.settings.worldFolder}/${SECTION_FOLDERS.groups}`;
 		const enemyLinks = this.data.enemies.split(",").filter(Boolean).map((e) => `[[${e.trim()}]]`).join(", ");
 		const allyLinks = this.data.allies.split(",").filter(Boolean).map((a) => `[[${a.trim()}]]`).join(", ");
 		const lines = [
@@ -3663,16 +3649,19 @@ class GroupModal extends Modal {
 			"",
 			`# ${this.data.name}`,
 			"",
-			`**Type:** ${GROUP_TYPES.find((t) => t.key === this.data.type)?.label ?? this.data.type}`,
-			...(this.data.subsidiaryOf ? [`**Subsidiary of:** [[${this.data.subsidiaryOf}]]`] : []),
-			`**Alignment:** ${this.data.alignment}`,
+			`**${t("note.type")}:** ${optionLabel("groupType", this.data.type)}`,
+			...(this.data.subsidiaryOf ? [`**${t("note.subsidiaryOf")}:** [[${this.data.subsidiaryOf}]]`] : []),
+			`**${t("note.alignment")}:** ${displayValue("alignment", this.data.alignment)}`,
 		];
-		if (enemyLinks) lines.push(`**Enemies:** ${enemyLinks}`);
-		if (allyLinks) lines.push(`**Allies:** ${allyLinks}`);
-		lines.push("", "## Goals", this.data.goals || "_None provided._", "", "## Description", this.data.description || "_None provided._");
+		if (enemyLinks) lines.push(`**${t("note.enemies")}:** ${enemyLinks}`);
+		if (allyLinks) lines.push(`**${t("note.allies")}:** ${allyLinks}`);
+		lines.push(
+			"", `## ${t("note.goals")}`, this.data.goals || t("note.noneProvided"),
+			"", `## ${t("note.description")}`, this.data.description || t("note.noneProvided")
+		);
 		const file = await createNote(this.app, folder, this.data.name, lines.join("\n"));
-		await this.portrait?.attachTo(file, `"${file.basename}" was created, but its portrait couldn't be imported.`);
-		new Notice(`Group "${this.data.name}" created.`);
+		await this.portrait?.attachTo(file, t("form.createdNoPortrait", { name: file.basename }));
+		new Notice(t("group.created", { name: this.data.name }));
 		this.close();
 		this.onDone();
 		await this.app.workspace.getLeaf().openFile(file);
@@ -3699,32 +3688,32 @@ class LoreModal extends Modal {
 	onOpen() {
 		const { contentEl } = this;
 		contentEl.addClass("wb-modal");
-		contentEl.createEl("h2", { text: "New Lore Entry" });
-		this.portrait = new PortraitPicker(this.app, this.plugin, contentEl, `${this.plugin.settings.worldFolder}/Lore`, this.modalEl);
+		contentEl.createEl("h2", { text: t("lore.new") });
+		this.portrait = new PortraitPicker(this.app, this.plugin, contentEl, `${this.plugin.settings.worldFolder}/${SECTION_FOLDERS.lore}`, this.modalEl);
 
-		new Setting(contentEl).setName("Title").addText((t) => {
-			t.setPlaceholder("Entry title").onChange((v) => (this.data.title = v));
+		new Setting(contentEl).setName(t("form.title")).addText((text) => {
+			text.setPlaceholder(t("lore.titlePlaceholder")).onChange((v) => (this.data.title = v));
 		});
-		new Setting(contentEl).setName("Category").addDropdown((d) => {
-			["history", "tech", "religion", "culture", "other"].forEach((o) => {
-				d.addOption(o, o.charAt(0).toUpperCase() + o.slice(1));
+		new Setting(contentEl).setName(t("lore.category")).addDropdown((d) => {
+			LORE_CATEGORIES.forEach((o) => {
+				d.addOption(o, optionLabel("loreCategory", o));
 			});
 			d.setValue(this.data.category);
 			d.onChange((v) => (this.data.category = v));
 		});
-		new Setting(contentEl).setName("Content").addTextArea((t) => {
-			t.inputEl.addClasses(["wb-textarea", "wb-textarea-tall"]);
-			t.onChange((v) => (this.data.content = v));
+		new Setting(contentEl).setName(t("lore.content")).addTextArea((text) => {
+			text.inputEl.addClasses(["wb-textarea", "wb-textarea-tall"]);
+			text.onChange((v) => (this.data.content = v));
 		});
 
 		new Setting(contentEl).addButton((b) =>
-			b.setButtonText("Create").setCta().onClick(() => void this.submit())
+			b.setButtonText(t("form.create")).setCta().onClick(() => void this.submit())
 		);
 	}
 
 	async submit() {
-		if (!this.data.title.trim()) { new Notice("Title is required."); return; }
-		const folder = `${this.plugin.settings.worldFolder}/Lore`;
+		if (!this.data.title.trim()) { new Notice(t("form.titleRequired")); return; }
+		const folder = `${this.plugin.settings.worldFolder}/${SECTION_FOLDERS.lore}`;
 		const content = [
 			"---",
 			`title: "${this.data.title}"`,
@@ -3734,13 +3723,13 @@ class LoreModal extends Modal {
 			"",
 			`# ${this.data.title}`,
 			"",
-			`*Category: ${this.data.category}*`,
+			`*${t("note.category")}: ${displayValue("loreCategory", this.data.category)}*`,
 			"",
-			this.data.content || "_No content yet._",
+			this.data.content || t("note.noContent"),
 		].join("\n");
 		const file = await createNote(this.app, folder, this.data.title, content);
-		await this.portrait?.attachTo(file, `"${file.basename}" was created, but its portrait couldn't be imported.`);
-		new Notice(`Lore entry "${this.data.title}" created.`);
+		await this.portrait?.attachTo(file, t("form.createdNoPortrait", { name: file.basename }));
+		new Notice(t("lore.created", { name: this.data.title }));
 		this.close();
 		this.onDone();
 		await this.app.workspace.getLeaf().openFile(file);
@@ -3767,34 +3756,34 @@ class TimelineModal extends Modal {
 	onOpen() {
 		const { contentEl } = this;
 		contentEl.addClass("wb-modal");
-		contentEl.createEl("h2", { text: "New Timeline Event" });
-		this.portrait = new PortraitPicker(this.app, this.plugin, contentEl, `${this.plugin.settings.worldFolder}/Timeline`, this.modalEl);
+		contentEl.createEl("h2", { text: t("timeline.new") });
+		this.portrait = new PortraitPicker(this.app, this.plugin, contentEl, `${this.plugin.settings.worldFolder}/${SECTION_FOLDERS.timeline}`, this.modalEl);
 
-		new Setting(contentEl).setName("Date / Era").addText((t) => {
-			t.setPlaceholder("e.g. Year 342 AE").onChange((v) => (this.data.date = v));
+		new Setting(contentEl).setName(t("timeline.date")).addText((text) => {
+			text.setPlaceholder(t("timeline.datePlaceholder")).onChange((v) => (this.data.date = v));
 		});
-		new Setting(contentEl).setName("Title").addText((t) => {
-			t.setPlaceholder("Event title").onChange((v) => (this.data.title = v));
+		new Setting(contentEl).setName(t("form.title")).addText((text) => {
+			text.setPlaceholder(t("timeline.titlePlaceholder")).onChange((v) => (this.data.title = v));
 		});
-		new Setting(contentEl).setName("Description").addTextArea((t) => {
-			t.inputEl.addClass("wb-textarea");
-			t.onChange((v) => (this.data.description = v));
+		new Setting(contentEl).setName(t("form.description")).addTextArea((text) => {
+			text.inputEl.addClass("wb-textarea");
+			text.onChange((v) => (this.data.description = v));
 		});
-		new Setting(contentEl).setName("Linked Characters").addText((t) => {
-			t.setPlaceholder("Comma-separated names").onChange((v) => (this.data.characters = v));
+		new Setting(contentEl).setName(t("timeline.characters")).addText((text) => {
+			text.setPlaceholder(t("form.commaSeparatedNames")).onChange((v) => (this.data.characters = v));
 		});
-		new Setting(contentEl).setName("Linked Locations").addText((t) => {
-			t.setPlaceholder("Comma-separated names").onChange((v) => (this.data.locations = v));
+		new Setting(contentEl).setName(t("timeline.locations")).addText((text) => {
+			text.setPlaceholder(t("form.commaSeparatedNames")).onChange((v) => (this.data.locations = v));
 		});
 
 		new Setting(contentEl).addButton((b) =>
-			b.setButtonText("Create").setCta().onClick(() => void this.submit())
+			b.setButtonText(t("form.create")).setCta().onClick(() => void this.submit())
 		);
 	}
 
 	async submit() {
-		if (!this.data.title.trim()) { new Notice("Title is required."); return; }
-		const folder = `${this.plugin.settings.worldFolder}/Timeline`;
+		if (!this.data.title.trim()) { new Notice(t("form.titleRequired")); return; }
+		const folder = `${this.plugin.settings.worldFolder}/${SECTION_FOLDERS.timeline}`;
 		const charLinks = this.data.characters.split(",").filter(Boolean).map((c) => `[[${c.trim()}]]`).join(", ");
 		const locLinks = this.data.locations.split(",").filter(Boolean).map((l) => `[[${l.trim()}]]`).join(", ");
 		const filename = this.data.date ? `${this.data.date} - ${this.data.title}` : this.data.title;
@@ -3807,14 +3796,14 @@ class TimelineModal extends Modal {
 			"",
 			`# ${this.data.title}`,
 			"",
-			`**Date/Era:** ${this.data.date || "_Unknown_"}`,
+			`**${t("note.dateEra")}:** ${this.data.date || t("note.unknown")}`,
 		];
-		if (charLinks) lines.push(`**Characters:** ${charLinks}`);
-		if (locLinks) lines.push(`**Locations:** ${locLinks}`);
-		lines.push("", "## Description", this.data.description || "_None provided._");
+		if (charLinks) lines.push(`**${t("note.characters")}:** ${charLinks}`);
+		if (locLinks) lines.push(`**${t("note.locations")}:** ${locLinks}`);
+		lines.push("", `## ${t("note.description")}`, this.data.description || t("note.noneProvided"));
 		const file = await createNote(this.app, folder, filename, lines.join("\n"));
-		await this.portrait?.attachTo(file, `"${file.basename}" was created, but its portrait couldn't be imported.`);
-		new Notice(`Timeline event "${this.data.title}" created.`);
+		await this.portrait?.attachTo(file, t("form.createdNoPortrait", { name: file.basename }));
+		new Notice(t("timeline.created", { name: this.data.title }));
 		this.close();
 		this.onDone();
 		await this.app.workspace.getLeaf().openFile(file);
@@ -3855,33 +3844,20 @@ class FolderMigrationModal extends Modal {
 		const { contentEl } = this;
 		const { source, sections, worldBuilder } = this.info;
 		contentEl.addClass("wb-modal", "wb-migrate-modal");
-		this.setTitle("Universe Builder now has its own folder");
+		this.setTitle(t("migrate.title"));
 
 		const total = sections.reduce((n, s) => n + s.count, 0);
+		// Folder names, not translated: they're the actual folders being moved.
 		const found = sections.map((s) => `${s.label} (${s.count})`).join(", ");
-		contentEl.createEl("p", {
-			text:
-				`Your Universe Builder notes are in "${source}/", a folder other plugins may also use. ` +
-				`Universe Builder now keeps its notes in "${DEFAULT_FOLDER}/" instead.`,
-		});
-		contentEl.createEl("p", {
-			text:
-				`Moving only covers the Characters, Groups, Locations, Lore, Timeline and ${IMAGES_SUBFOLDER} folders in "${source}/". ` +
-				`Found: ${found}, ${total} file${total === 1 ? "" : "s"} in all. ` +
-				`Anything else in "${source}/" stays where it is. Links between notes keep working.`,
-		});
+		contentEl.createEl("p", { text: t("migrate.intro", { source, target: DEFAULT_FOLDER }) });
+		contentEl.createEl("p", { text: tn("migrate.scope", total, { images: IMAGES_SUBFOLDER, source, found, total }) });
 		if (worldBuilder) {
 			contentEl.createEl("p", {
 				cls: "wb-migrate-warning",
-				text:
-					`The World Builder plugin is installed in this vault (${worldBuilder}). ` +
-					`After moving, it will no longer see these notes.`,
+				text: t(worldBuilder === "enabled" ? "migrate.worldBuilder.enabled" : "migrate.worldBuilder.disabled"),
 			});
 		}
-		contentEl.createEl("p", {
-			cls: "wb-migrate-note",
-			text: `Folder paths typed into other plugins or notes (for example a Dataview query on "${source}") aren't updated.`,
-		});
+		contentEl.createEl("p", { cls: "wb-migrate-note", text: t("migrate.note", { source }) });
 
 		const buttons = contentEl.createDiv({ cls: "wb-migrate-buttons" });
 		const add = (text: string, choice: MigrationChoice, cta = false) => {
@@ -3892,9 +3868,9 @@ class FolderMigrationModal extends Modal {
 				this.close();
 			});
 		};
-		add(`Move to ${DEFAULT_FOLDER}/ (recommended)`, "move", true);
-		add(`Keep ${source}/, ask again next update`, "ask-later");
-		add(`Keep ${source}/, don't ask again`, "decline");
+		add(t("migrate.move", { target: DEFAULT_FOLDER }), "move", true);
+		add(t("migrate.askLater", { source }), "ask-later");
+		add(t("migrate.decline", { source }), "decline");
 	}
 
 	onClose() {
@@ -3922,18 +3898,14 @@ class LegacyCleanupModal extends Modal {
 	onOpen() {
 		const { contentEl, folder, emptyFolders } = this;
 		contentEl.addClass("wb-modal", "wb-migrate-modal");
-		this.setTitle(`Delete the empty "${folder}" folder?`);
+		this.setTitle(t("cleanup.title", { folder }));
 
 		contentEl.createEl("p", {
-			text:
-				`Your notes are now in "${DEFAULT_FOLDER}/", and "${folder}/" has no files left in it` +
-				(emptyFolders.length ? ` (only empty folders: ${emptyFolders.join(", ")}).` : ".") +
-				" Nothing uses it any more, so it can be deleted.",
+			text: emptyFolders.length
+				? t("cleanup.messageEmptyFolders", { target: DEFAULT_FOLDER, folder, folders: emptyFolders.join(", ") })
+				: t("cleanup.message", { target: DEFAULT_FOLDER, folder }),
 		});
-		contentEl.createEl("p", {
-			cls: "wb-migrate-note",
-			text: `Deleted folders go to the trash, following Obsidian's "Deleted files" setting.`,
-		});
+		contentEl.createEl("p", { cls: "wb-migrate-note", text: t("cleanup.note") });
 
 		const buttons = contentEl.createDiv({ cls: "wb-migrate-buttons" });
 		const add = (text: string, choice: "delete" | "keep", cta = false) => {
@@ -3944,8 +3916,8 @@ class LegacyCleanupModal extends Modal {
 				this.close();
 			});
 		};
-		add(`Delete ${folder}/`, "delete", true);
-		add(`Keep ${folder}/`, "keep");
+		add(t("cleanup.delete", { folder }), "delete", true);
+		add(t("cleanup.keep", { folder }), "keep");
 	}
 
 	onClose() {
@@ -3955,6 +3927,11 @@ class LegacyCleanupModal extends Modal {
 }
 
 // ─── Settings Tab ─────────────────────────────────────────────────────────────
+
+/** A stored Language setting, or "auto" if it's missing or not a language the plugin has. */
+function normalizeLanguage(value: unknown): LanguageSetting {
+	return typeof value === "string" && (LOCALES as readonly string[]).includes(value) ? (value as LanguageSetting) : "auto";
+}
 
 class UniverseBuilderSettingTab extends PluginSettingTab {
 	plugin: UniverseBuilderPlugin;
@@ -3969,13 +3946,28 @@ class UniverseBuilderSettingTab extends PluginSettingTab {
 	 * cheap: it runs on every update() and once when the tab is registered.
 	 */
 	getSettingDefinitions(): SettingDefinitionItem[] {
+		// "Automatic" names the language it currently resolves to, so it's clear what it picked.
+		const languageOptions: Record<string, string> = {
+			auto: t("settings.languageAuto", { language: LANGUAGE_NAMES[detectLocale()] }),
+		};
+		for (const locale of LOCALES) languageOptions[locale] = LANGUAGE_NAMES[locale];
 		return [
 			{
-				name: "Universe folder",
-				desc:
-					"Root folder for all Universe Builder notes. Changing it doesn't move existing notes; " +
-					'to move notes out of an old "World" folder, run the "Move notes out of the World folder" command.',
-				aliases: ["world folder", "root", "directory", "path"],
+				name: t("settings.language"),
+				desc: t("settings.languageDesc"),
+				// Search words in every supported language find it, whatever language is showing.
+				aliases: ["language", "translation", "locale", "idioma", "língua", "langue", "sprache", "язык", "мова", "语言", "言語", "traducción", "tradução", "traduction", "übersetzung", "перевод", "переклад", "翻译", "翻訳"],
+				control: {
+					type: "dropdown",
+					key: "language",
+					options: languageOptions,
+					defaultValue: DEFAULT_SETTINGS.language,
+				},
+			},
+			{
+				name: t("settings.folder"),
+				desc: t("settings.folderDesc"),
+				aliases: ["world folder", "root", "directory", "path", "carpeta", "raíz"],
 				control: {
 					type: "text",
 					key: "worldFolder",
@@ -3984,16 +3976,13 @@ class UniverseBuilderSettingTab extends PluginSettingTab {
 				},
 			},
 			{
-				name: "Sidebar editor",
-				desc:
-					"What the Edit button on an expanded entry opens. Live Preview uses Obsidian's own editor " +
-					"(formatting shown as you type, [[link]] suggestions); Raw markdown is a plain text box. " +
-					"If Live Preview ever stops working after an Obsidian update, the plugin falls back to Raw markdown on its own.",
-				aliases: ["live preview", "raw markdown", "edit"],
+				name: t("settings.editor"),
+				desc: t("settings.editorDesc"),
+				aliases: ["live preview", "raw markdown", "edit", "editor", "vista previa en vivo", "markdown sin formato", "editar"],
 				control: {
 					type: "dropdown",
 					key: "inlineEditor",
-					options: { live: "Live Preview", raw: "Raw markdown" },
+					options: { live: t("settings.editorLive"), raw: t("settings.editorRaw") },
 					defaultValue: DEFAULT_SETTINGS.inlineEditor,
 				},
 			},
@@ -4003,7 +3992,7 @@ class UniverseBuilderSettingTab extends PluginSettingTab {
 	/**
 	 * Normalises values before they are stored, preserving the rules the old imperative tab
 	 * applied in its onChange handlers: an empty folder falls back to the default, and the
-	 * editor choice is always "live" or "raw".
+	 * editor choice is always "live" or "raw". A new language takes effect straight away.
 	 */
 	async setControlValue(key: string, value: unknown): Promise<void> {
 		const settings = this.plugin.settings;
@@ -4014,6 +4003,13 @@ class UniverseBuilderSettingTab extends PluginSettingTab {
 			case "inlineEditor":
 				settings.inlineEditor = value === "raw" ? "raw" : "live";
 				break;
+			case "language":
+				settings.language = normalizeLanguage(value);
+				await this.plugin.saveSettings();
+				this.plugin.applyLanguage();
+				// Rebuild this tab from getSettingDefinitions() so its own text switches language too.
+				this.update();
+				return;
 			default:
 				return;
 		}
@@ -4028,41 +4024,13 @@ export default class UniverseBuilderPlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
+		setLanguage(this.settings.language);
 
 		this.registerView(VIEW_TYPE, (leaf) => new UniverseBuilderView(leaf, this));
 
 		this.addRibbonIcon("orbit", "Universe Builder", () => void this.activateSidebar());
 
-		this.addCommand({
-			id: "open-sidebar",
-			name: "Open sidebar",
-			callback: () => void this.activateSidebar(),
-		});
-		this.addCommand({
-			id: "new-character",
-			name: "New Character",
-			callback: () => new CharacterModal(this.app, this, () => this.refreshSidebar()).open(),
-		});
-		this.addCommand({
-			id: "new-location",
-			name: "New Location",
-			callback: () => new LocationModal(this.app, this, () => this.refreshSidebar()).open(),
-		});
-		this.addCommand({
-			id: "new-group",
-			name: "New Group",
-			callback: () => new GroupModal(this.app, this, () => this.refreshSidebar()).open(),
-		});
-		this.addCommand({
-			id: "new-lore",
-			name: "New Lore Entry",
-			callback: () => new LoreModal(this.app, this, () => this.refreshSidebar()).open(),
-		});
-		this.addCommand({
-			id: "new-timeline-event",
-			name: "New Timeline Event",
-			callback: () => new TimelineModal(this.app, this, () => this.refreshSidebar()).open(),
-		});
+		this.registerCommands();
 
 		this.registerEvent(
 			this.app.vault.on("rename", async (file, oldPath) => {
@@ -4095,14 +4063,37 @@ export default class UniverseBuilderPlugin extends Plugin {
 		);
 
 		this.addSettingTab(new UniverseBuilderSettingTab(this.app, this));
-
-		this.addCommand({
-			id: "move-world-folder",
-			name: "Move notes out of the World folder",
-			callback: () => void this.checkFolderMigration(true),
-		});
 		// The vault's file tree isn't fully indexed until layout is ready.
 		this.app.workspace.onLayoutReady(() => void this.checkFolderMigration());
+	}
+
+	/** Command ids and their names' translation keys, in Command palette order. */
+	private readonly commandNames: [string, TranslationKey, () => void][] = [
+		["open-sidebar", "command.openSidebar", () => void this.activateSidebar()],
+		["new-character", "command.newCharacter", () => new CharacterModal(this.app, this, () => this.refreshSidebar()).open()],
+		["new-location", "command.newLocation", () => new LocationModal(this.app, this, () => this.refreshSidebar()).open()],
+		["new-group", "command.newGroup", () => new GroupModal(this.app, this, () => this.refreshSidebar()).open()],
+		["new-lore", "command.newLore", () => new LoreModal(this.app, this, () => this.refreshSidebar()).open()],
+		["new-timeline-event", "command.newTimelineEvent", () => new TimelineModal(this.app, this, () => this.refreshSidebar()).open()],
+		["move-world-folder", "command.moveWorldFolder", () => void this.checkFolderMigration(true)],
+	];
+
+	/** Adds the commands, named in the current language. Called again (replacing them) when the language changes. */
+	private registerCommands() {
+		for (const [id, key, callback] of this.commandNames) {
+			this.addCommand({ id, name: t(key), callback });
+		}
+	}
+
+	/**
+	 * Switches everything shown to the Language setting's language: the sidebar is redrawn and the
+	 * commands are re-added under their new names. Forms and dialogs pick it up the next time they open.
+	 */
+	applyLanguage() {
+		setLanguage(this.settings.language);
+		for (const [id] of this.commandNames) this.removeCommand(id);
+		this.registerCommands();
+		this.refreshSidebar();
 	}
 
 	// ─── Folder migration (World/ -> UniverseBuilder/) ───────────────────────────
@@ -4133,7 +4124,7 @@ export default class UniverseBuilderPlugin extends Plugin {
 			if (current !== LEGACY_FOLDER.toLowerCase() && current !== DEFAULT_FOLDER.toLowerCase()) {
 				// A custom folder is the user's own choice; leave it alone.
 				if (manual) {
-					new Notice(`Universe Builder uses the custom folder "${this.settings.worldFolder}", so there's nothing to move.`);
+					new Notice(t("migrate.customFolder", { folder: this.settings.worldFolder }));
 				} else {
 					state.status = "not-needed";
 					await this.saveSettings();
@@ -4151,7 +4142,7 @@ export default class UniverseBuilderPlugin extends Plugin {
 					await this.offerLegacyCleanup();
 					return;
 				}
-				if (manual) new Notice(`There are no Universe Builder notes in "${LEGACY_FOLDER}/" to move.`);
+				if (manual) new Notice(t("migrate.nothingToMove", { folder: LEGACY_FOLDER }));
 				// An install that was using an empty World/ switches to the new default.
 				if (current === LEGACY_FOLDER.toLowerCase()) this.settings.worldFolder = DEFAULT_FOLDER;
 				if (!state.status) state.status = "not-needed";
@@ -4259,7 +4250,7 @@ export default class UniverseBuilderPlugin extends Plugin {
 			await ensureFolder(this.app, DEFAULT_FOLDER);
 		} catch (e) {
 			console.error(`Universe Builder: couldn't create "${DEFAULT_FOLDER}"`, e);
-			new Notice(`Couldn't create the "${DEFAULT_FOLDER}" folder, so nothing was moved.`);
+			new Notice(t("migrate.createFailed", { folder: DEFAULT_FOLDER }));
 			return;
 		}
 
@@ -4314,14 +4305,10 @@ export default class UniverseBuilderPlugin extends Plugin {
 		await this.saveSettings();
 		this.refreshSidebar();
 
-		const lines = [`Moved ${moved.size} file${moved.size === 1 ? "" : "s"} to "${DEFAULT_FOLDER}/".`];
-		if (skipped.length) {
-			lines.push(`${skipped.length} skipped because a file with the same name was already there: ${skipped.join(", ")}.`);
-		}
-		if (failed.length) {
-			lines.push(`${failed.length} couldn't be moved (see the developer console); you'll be asked again next launch: ${failed.join(", ")}.`);
-		}
-		if (leftovers.length && legacy) lines.push(`Left in "${legacy.path}/": ${leftovers.join(", ")}.`);
+		const lines = [tn("migrate.moved", moved.size, { folder: DEFAULT_FOLDER })];
+		if (skipped.length) lines.push(t("migrate.skipped", { count: skipped.length, files: skipped.join(", ") }));
+		if (failed.length) lines.push(t("migrate.failed", { count: failed.length, files: failed.join(", ") }));
+		if (leftovers.length && legacy) lines.push(t("migrate.leftovers", { folder: legacy.path, items: leftovers.join(", ") }));
 		// Keep a problem report on screen until clicked; a clean move fades normally.
 		new Notice(lines.join("\n"), skipped.length || failed.length ? 0 : 8000);
 
@@ -4364,16 +4351,16 @@ export default class UniverseBuilderPlugin extends Plugin {
 			// Re-check: a file may have synced in while the dialog was open.
 			const current = this.findLegacyFolder();
 			if (current && this.hasFiles(current)) {
-				new Notice(`"${current.path}/" has files in it again, so it wasn't deleted.`);
+				new Notice(t("cleanup.hasFiles", { folder: current.path }));
 				return;
 			}
 			try {
 				if (current) await this.app.fileManager.trashFile(current);
 				state.legacyCleanup = "deleted";
-				new Notice(`Deleted the empty "${legacy.path}/" folder.`);
+				new Notice(t("cleanup.deleted", { folder: legacy.path }));
 			} catch (e) {
 				console.error(`Universe Builder: couldn't delete "${legacy.path}"`, e);
-				new Notice(`Couldn't delete "${legacy.path}/" (see the developer console).`);
+				new Notice(t("cleanup.failed", { folder: legacy.path }));
 				return;
 			}
 		}
@@ -4440,6 +4427,7 @@ export default class UniverseBuilderPlugin extends Plugin {
 		this.settings.folderMigration = { ...(data?.folderMigration ?? {}) };
 		this.migrateLegacySettings(data);
 		this.settings.inlineEditor = data?.inlineEditor === "raw" ? "raw" : "live";
+		this.settings.language = normalizeLanguage(data?.language);
 	}
 	/**
 	 * Carries over plugin data saved before the "Employers" tab was renamed to "Groups", so
