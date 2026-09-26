@@ -487,16 +487,23 @@
 	border-top: 1px solid var(--wb-expand-divider);
 }
 /* Red buttons: DELETE on an expanded card, and the Delete button of its confirm dialog. */
-.wb-btn-primary.wb-btn-danger,
-.wb-card-expand-footer .wb-btn-danger {
+.wb-btn-primary.wb-btn-danger {
 	background: var(--color-red);
 	color: #fff;
 }
-.wb-btn-primary.wb-btn-danger:hover,
-.wb-card-expand-footer .wb-btn-danger:hover {
+.wb-btn-primary.wb-btn-danger:hover {
 	background: var(--color-red);
 	color: #fff;
 	filter: brightness(1.1);
+}
+/* DELETE on an expanded card: the same red at half strength, so it doesn't shout. */
+.wb-card-expand-footer .wb-btn-danger {
+	background: rgba(var(--color-red-rgb), 0.5);
+	color: #fff;
+}
+.wb-card-expand-footer .wb-btn-danger:hover {
+	background: rgba(var(--color-red-rgb), 0.65);
+	color: #fff;
 }
 
 /* Inline markdown editor: replaces the rendered preview while an expanded card is being edited. */
