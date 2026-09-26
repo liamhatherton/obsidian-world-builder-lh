@@ -13,12 +13,14 @@ A fiction world-building toolkit for Obsidian: characters, locations, groups, lo
 - **Timeline Events** — date/era, title, description, linked characters/locations
 - **World Sidebar** — tabbed view across all five entry types
 - **Bookmarks** — bookmark any entry from its expanded view, and open them all from the **Bookmarks** button beside the sidebar's title
+- **10 languages** — English, Español, Português, Português (Brasil), Français, Deutsch, Русский, Українська, 简体中文 and 日本語. The sidebar, forms, messages, commands and settings follow Obsidian's language, or the **Language** setting
 - **Search** — a search bar pinned under the section header on every tab (each tab keeps its own text); type to hide whatever doesn't match, all words must match. Characters are matched on name, group, ship and home; the other tabs on the name and the text of the note
 
 ## Settings
 
-Requires Obsidian 1.13.0 or later. Settings are declared with Obsidian's declarative settings API, so both appear in the Settings search box.
+Requires Obsidian 1.13.0 or later. Settings are declared with Obsidian's declarative settings API, so all of them appear in the Settings search box.
 
+- **Language** — the language the plugin is shown in: **Automatic** (the default) follows Obsidian's own language (Settings › General › Language), or pick one of the plugin's languages to override it. Falls back to English when Obsidian is set to a language the plugin hasn't been translated into
 - **Universe folder** — where all Universe Builder notes are stored (default: `UniverseBuilder`). Changing it doesn't move existing notes
 - **Sidebar editor** — what the Edit button on an expanded entry opens: **Live Preview** (Obsidian's own editor, the default) or **Raw markdown** (a plain text box holding the whole file, frontmatter included). See [Undocumented Obsidian API](https://github.com/liamhatherton/universe-builder/blob/main/UNDOCUMENTED-API.md)
 
@@ -33,3 +35,4 @@ Requires Obsidian 1.13.0 or later. Settings are declared with Obsidian's declara
 - [Moving notes out of the World folder](https://github.com/liamhatherton/universe-builder/blob/main/MOVING-FROM-WORLD-FOLDER.md) — the one-time prompt that moves notes from `World/` to `UniverseBuilder/` for users of earlier versions
 - [Changes from upstream](https://github.com/liamhatherton/universe-builder/blob/main/CHANGES-FROM-UPSTREAM.md) — everything this fork adds or changes compared to the original World Builder
 - [Undocumented Obsidian API](https://github.com/liamhatherton/universe-builder/blob/main/UNDOCUMENTED-API.md) — where the sidebar's Live Preview editor relies on Obsidian internals, and what to do if an update breaks it
+- [Translations](https://github.com/liamhatherton/universe-builder/tree/main/src/locales) — one file per language holding every piece of text the plugin shows; `src/i18n.ts` explains how to add another
